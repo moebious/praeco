@@ -1,0 +1,435 @@
+{
+  "manifestVersion": "3.0.0",
+  "purpose": "Synthetic expected values and cross-layer acceptance contexts; no input PDFs or live execution results included",
+  "company": "Acme Global Inc. (fictional US entity)",
+  "policyFixture": {
+    "policyVersion": "BLINKA-DEMO-2026-10-v3",
+    "maxAutoApproveUsd": "2500.00",
+    "recurringAllowedVariancePercent": "5.00",
+    "budgetCurrency": "USD",
+    "effectivePeriod": "2026-10",
+    "payeeMismatchDisposition": "BLOCKED",
+    "newBeneficiaryDisposition": "BLOCKED",
+    "contractOverageDisposition": "BLOCKED",
+    "insufficientBudgetDisposition": "BLOCKED"
+  },
+  "fxFixtures": [
+    {
+      "rateId": "DEMO-USD-COP-2026-10",
+      "baseCurrency": "USD",
+      "quoteCurrency": "COP",
+      "quotePerBase": "4000.00",
+      "effectiveAt": "2026-10-01T00:00:00Z",
+      "source": "HACKATHON_FIXED",
+      "rounding": "HALF_EVEN",
+      "outputScale": 2
+    },
+    {
+      "rateId": "DEMO-USD-MXN-2026-10",
+      "baseCurrency": "USD",
+      "quoteCurrency": "MXN",
+      "quotePerBase": "20.00",
+      "effectiveAt": "2026-10-01T00:00:00Z",
+      "source": "HACKATHON_FIXED",
+      "rounding": "HALF_EVEN",
+      "outputScale": 2
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "BLINKA-01",
+      "title": "Bogotá developer contractor",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "PDF"
+      ],
+      "sourceIds": [
+        "doc-bogota-pdf"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-BOG",
+        "invoiceNumber": "BOG-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "2200.00",
+          "currency": "USD"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "2200.00",
+          "currency": "USD"
+        },
+        "fxRateId": null,
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-01",
+        "sourceIds": [
+          "doc-bogota-pdf"
+        ],
+        "crossSourceCorrelationRequired": false,
+        "note": "Single-source payable case."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-01",
+        "monthlyAvailableUsd": "5000.00",
+        "allowedBeneficiary": true,
+        "paymentAccountMatchesDirectory": true,
+        "activeContractLimitUsd": "2200.00",
+        "recurringBaselineUsd": null,
+        "priorAuthorizedInvoice": null
+      },
+      "expectedL2": {
+        "outcome": "AUTHORIZED_SIMULATED",
+        "primaryReasonCode": "ALL_GATES_PASS"
+      }
+    },
+    {
+      "id": "BLINKA-02",
+      "title": "Cloud infrastructure recurring SaaS",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "PDF",
+        "EMAIL"
+      ],
+      "sourceIds": [
+        "doc-cloud-pdf",
+        "msg-cloud-email"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-CLOUD",
+        "invoiceNumber": "CLOUD-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "480.00",
+          "currency": "USD"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "480.00",
+          "currency": "USD"
+        },
+        "fxRateId": null,
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-02",
+        "sourceIds": [
+          "doc-cloud-pdf",
+          "msg-cloud-email"
+        ],
+        "crossSourceCorrelationRequired": true,
+        "note": "Related messages/files must keep separate provenance."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-02",
+        "monthlyAvailableUsd": "5000.00",
+        "allowedBeneficiary": true,
+        "paymentAccountMatchesDirectory": true,
+        "activeContractLimitUsd": "500.00",
+        "recurringBaselineUsd": "470.00",
+        "priorAuthorizedInvoice": null
+      },
+      "expectedL2": {
+        "outcome": "AUTHORIZED_SIMULATED",
+        "primaryReasonCode": "RECURRING_VARIANCE_WITHIN_5_PERCENT"
+      }
+    },
+    {
+      "id": "BLINKA-03",
+      "title": "Mexico design agency above autoapproval",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "PDF"
+      ],
+      "sourceIds": [
+        "doc-mexico-pdf"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-MEX",
+        "invoiceNumber": "MEX-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "76000.00",
+          "currency": "MXN"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "3800.00",
+          "currency": "USD"
+        },
+        "fxRateId": "DEMO-USD-MXN-2026-10",
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-03",
+        "sourceIds": [
+          "doc-mexico-pdf"
+        ],
+        "crossSourceCorrelationRequired": false,
+        "note": "Single-source payable case."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-03",
+        "monthlyAvailableUsd": "4500.00",
+        "allowedBeneficiary": true,
+        "paymentAccountMatchesDirectory": true,
+        "activeContractLimitUsd": "4000.00",
+        "recurringBaselineUsd": null,
+        "priorAuthorizedInvoice": null
+      },
+      "expectedL2": {
+        "outcome": "PENDING_HUMAN_APPROVAL",
+        "primaryReasonCode": "AUTO_APPROVAL_THRESHOLD_EXCEEDED"
+      }
+    },
+    {
+      "id": "BLINKA-04",
+      "title": "Argentina contractor undocumented bonus",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "PDF",
+        "CHAT"
+      ],
+      "sourceIds": [
+        "doc-argentina-pdf",
+        "msg-argentina-chat"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-ARG",
+        "invoiceNumber": "ARG-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "1950.00",
+          "currency": "USD"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "1950.00",
+          "currency": "USD"
+        },
+        "fxRateId": null,
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-04",
+        "sourceIds": [
+          "doc-argentina-pdf",
+          "msg-argentina-chat"
+        ],
+        "crossSourceCorrelationRequired": true,
+        "note": "PDF is the canonical invoice source; chat is supplemental evidence, not a merged L1 invoice."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-04",
+        "monthlyAvailableUsd": "4000.00",
+        "allowedBeneficiary": true,
+        "paymentAccountMatchesDirectory": true,
+        "activeContractLimitUsd": "1500.00",
+        "recurringBaselineUsd": null,
+        "priorAuthorizedInvoice": null
+      },
+      "expectedL2": {
+        "outcome": "BLOCKED",
+        "primaryReasonCode": "CONTRACT_AMOUNT_MISMATCH"
+      }
+    },
+    {
+      "id": "BLINKA-05",
+      "title": "Resubmitted duplicate of Bogotá invoice",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "EMAIL"
+      ],
+      "sourceIds": [
+        "msg-bogota-forward"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-BOG",
+        "invoiceNumber": "BOG-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "2200.00",
+          "currency": "USD"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "2200.00",
+          "currency": "USD"
+        },
+        "fxRateId": null,
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-05",
+        "sourceIds": [
+          "msg-bogota-forward"
+        ],
+        "crossSourceCorrelationRequired": false,
+        "note": "Single-source payable case."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-05",
+        "monthlyAvailableUsd": "4000.00",
+        "allowedBeneficiary": true,
+        "paymentAccountMatchesDirectory": true,
+        "activeContractLimitUsd": "2200.00",
+        "recurringBaselineUsd": null,
+        "priorAuthorizedInvoice": {
+          "beneficiaryId": "VENDOR-BOG",
+          "invoiceNumber": "BOG-2026-10",
+          "billingPeriod": "2026-10",
+          "status": "AUTHORIZED_SIMULATED"
+        }
+      },
+      "expectedL2": {
+        "outcome": "BLOCKED",
+        "primaryReasonCode": "DUPLICATE_EXISTING_AUTHORIZATION"
+      }
+    },
+    {
+      "id": "BLINKA-06",
+      "title": "New Colombian beneficiary not allowlisted",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "PDF"
+      ],
+      "sourceIds": [
+        "doc-new-vendor-cop"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-UNKNOWN",
+        "invoiceNumber": "COP-NEW-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "2400000.00",
+          "currency": "COP"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "600.00",
+          "currency": "USD"
+        },
+        "fxRateId": "DEMO-USD-COP-2026-10",
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-06",
+        "sourceIds": [
+          "doc-new-vendor-cop"
+        ],
+        "crossSourceCorrelationRequired": false,
+        "note": "Single-source payable case."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-06",
+        "monthlyAvailableUsd": "4000.00",
+        "allowedBeneficiary": false,
+        "paymentAccountMatchesDirectory": false,
+        "activeContractLimitUsd": "600.00",
+        "recurringBaselineUsd": null,
+        "priorAuthorizedInvoice": null
+      },
+      "expectedL2": {
+        "outcome": "BLOCKED",
+        "primaryReasonCode": "BENEFICIARY_NOT_ALLOWLISTED"
+      }
+    },
+    {
+      "id": "BLINKA-07",
+      "title": "Insufficient monthly budget",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "PDF"
+      ],
+      "sourceIds": [
+        "doc-over-budget"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-BUDGET",
+        "invoiceNumber": "BUDGET-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "2100.00",
+          "currency": "USD"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "2100.00",
+          "currency": "USD"
+        },
+        "fxRateId": null,
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-07",
+        "sourceIds": [
+          "doc-over-budget"
+        ],
+        "crossSourceCorrelationRequired": false,
+        "note": "Single-source payable case."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-07",
+        "monthlyAvailableUsd": "1400.00",
+        "allowedBeneficiary": true,
+        "paymentAccountMatchesDirectory": true,
+        "activeContractLimitUsd": "2200.00",
+        "recurringBaselineUsd": null,
+        "priorAuthorizedInvoice": null
+      },
+      "expectedL2": {
+        "outcome": "BLOCKED",
+        "primaryReasonCode": "INSUFFICIENT_PERIOD_BUDGET"
+      }
+    },
+    {
+      "id": "BLINKA-08",
+      "title": "Changed payment account",
+      "fixtureStatus": "DESIGN_ONLY_NOT_RENDERED",
+      "channels": [
+        "PDF"
+      ],
+      "sourceIds": [
+        "doc-changed-account"
+      ],
+      "l1GroundTruth": {
+        "beneficiaryIdForExpectedMatching": "VENDOR-ACCOUNT",
+        "invoiceNumber": "ACCOUNT-2026-10",
+        "billingPeriod": "2026-10",
+        "totalDue": {
+          "amount": "1200.00",
+          "currency": "USD"
+        },
+        "expectedUsdEquivalent": {
+          "amount": "1200.00",
+          "currency": "USD"
+        },
+        "fxRateId": null,
+        "expectedProcessingStatus": "READY_FOR_POLICY_EVALUATION",
+        "criticalEvidence": "REQUIRED_PER_FIELD"
+      },
+      "l3PayableCase": {
+        "payableCaseId": "case-blinka-08",
+        "sourceIds": [
+          "doc-changed-account"
+        ],
+        "crossSourceCorrelationRequired": false,
+        "note": "Single-source payable case."
+      },
+      "l2EvaluationSnapshot": {
+        "snapshotId": "budget-blinka-08",
+        "monthlyAvailableUsd": "4000.00",
+        "allowedBeneficiary": true,
+        "paymentAccountMatchesDirectory": false,
+        "activeContractLimitUsd": "1200.00",
+        "recurringBaselineUsd": null,
+        "priorAuthorizedInvoice": null
+      },
+      "expectedL2": {
+        "outcome": "BLOCKED",
+        "primaryReasonCode": "PAYMENT_ACCOUNT_MISMATCH"
+      }
+    }
+  ]
+}

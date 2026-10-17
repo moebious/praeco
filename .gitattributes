@@ -1,0 +1,2 @@
+# Preserve the supplied reference documents, including intentional Markdown hard breaks.
+docs/reference/l1-original-handoff/** whitespace=-blank-at-eol
