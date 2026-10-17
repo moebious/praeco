@@ -2,6 +2,8 @@
 
 **Status:** Accepted initial architecture and interface baseline. **Implementation not yet verified.**
 
+The complete original handoff is retained in [reference documentation](../reference/l1-original-handoff/README.md). Its [alignment report](l1-handoff-alignment.md) distinguishes original requirements, implemented behavior and remaining provider/human/cross-layer validation. The current `contracts.ts` remains authoritative.
+
 ## Mission
 
 Transform untrusted PDF, image, email and chat sources into reproducible, source-attributed financial facts. L1 never authorizes payments, matches authoritative agreements, enforces budgets, validates vendor allowlists or grants agent permissions.

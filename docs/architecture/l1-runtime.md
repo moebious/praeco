@@ -2,6 +2,8 @@
 
 The canonical `contracts.ts` file and `L1_CONTRACT_VERSION` are unchanged. This document describes implementation choices within that interface. L1 produces financial evidence; financial decisions remain exclusively in L2, and cross-source case correlation remains in L3.
 
+The full original handoff is now available as [historical reference](../reference/l1-original-handoff/README.md). See the [alignment report](l1-handoff-alignment.md) for omissions corrected after comparing it with the earlier public summary.
+
 ## Provision locally
 
 Use Node 22.12+ (CI uses Node 22) and npm:
@@ -69,6 +71,12 @@ Bind the tenant in authenticated application context, not an agent-supplied argu
 
 Registration is tenant-scoped and content-addressed; replaying identical bytes/channel/origin returns the original registered descriptor. Reusing the same transport message ID with different content fails. Reprocessing a registered source creates a new run and envelopes; L1 does not claim business-invoice deduplication or exactly-once external provider jobs. Those are distinct from financial ledger idempotency.
 
+An explicitly marked native `Supplemental context`/`Contexto complementario` message without invoice-like fields can return `[]`. Its source, parse, classification and run receipt remain retained. Unknown, unreadable or invoice-like sources are not silently discarded. This bounded native classifier does not prove that a message is true or contractually authoritative. L3 still verifies its `SourceLink` association. The original L3 `SourceLink`/`PayableCaseReference` sketch is restored in reference documentation rather than added to the L1 wire contract.
+
+For deterministic replay, call `await l1.replay(authenticatedTenantId, envelopeId)`. It reads the retained extraction/parse/evidence/rate snapshot, verifies artifacts again, and issues a new report/envelope. It never invokes LiteParse, LlamaParse or LlamaExtract. Invoice/evidence/normalization and checks should match; report IDs and timestamps may differ. An incompatible verifier rule version or altered source/parse artifact rejects replay. `reader.loadRun` exposes an existing run's immutable finish receipt by ID to trusted backend callers.
+
+Persistence can be supplied with `createL1({ storageRoot, persistence })` using `ImmutablePersistencePort.put/get`. `put` must be atomic and immutable: same key/same bytes is idempotent; same key/different bytes fails. A Neon implementation can compose PostgreSQL records with controlled blob storage without adding database types to domain payloads. A Trigger.dev wrapper remains external orchestration; no Trigger SDK is imported by L1. Neither account provisioning nor a verified Neon/Trigger adapter is implied by the persistence seam.
+
 ## L2 integration and trust
 
 ```ts
@@ -93,6 +101,10 @@ The conservative critical profile requires observed invoice number, due date, be
 
 Text evidence uses half-open UTF-8 byte spans into retained per-page artifacts or exact native message bytes. The verifier checks codepoint boundaries, source/hash binding, page/segment membership, quote equality, field-value support, label context, source conflicts and artifact hashes. Unsupported context routes to review. A page bounding box alone is not accepted as proof of its quoted text. Instruction-pattern detection only adds a review signal; capability isolation and deterministic verification enforce the actual trust boundary.
 
+Native single-message snapshots with an origin message ID use `MESSAGE_SPAN`; other parsed representations use `TEXT_SPAN`. Explicit Spanish date labels allow DD/MM/YYYY representation conversion while retaining original source quotations. Line-item extraction is supported by the labelled adapter and LlamaExtract's nested schema/metadata mapping; complete quantities, prices and subtotals are checked independently. The versioned verifier rules are `source-grounding-v2`.
+
+`accountAuditReference(envelope, tenantKey)` optionally emits a last-four redaction and tenant-bound HMAC fingerprint for audit correlation. Supply a server-held key of at least 32 bytes, keep it outside models/logs, and manage rotation in the backend. Fingerprints do not validate or authorize accounts; default summaries continue to omit account identifiers entirely.
+
 Amounts are nonnegative base-10 decimal strings, at most 15 integer digits and six decimal places; unsupported credit/refund semantics and zero payables do not become ready. Money arithmetic uses an isolated decimal.js context at 80 digits with HALF_EVEN output to two USD decimals. Quote direction is always source units per USD. Demo COP/MXN snapshots are pinned and fictional; USD uses identity.
 
 An explicitly observed outstanding balance is preferred. Otherwise the observed total is a candidate, not a statement that nothing was previously paid. Positive observed paid amounts without a remaining balance require review; consistent total/paid/outstanding and complete subtotal/tax/discount or line-item arithmetic are checked. L2 independently reconciles prior obligations and reservations. L1 does not choose budget periods or financial policy thresholds.
@@ -104,6 +116,9 @@ An explicitly observed outstanding balance is preferred. Otherwise the observed 
 - Raster cases without hosted parsing explicitly expect non-ready operational results. Those tests demonstrate safe absence of a provider, not OCR accuracy. Hosted OCR currently always requires review.
 - Test-only annotations are machine-authored and reviewed in code; independent human annotation/sign-off remains pending. The manifest states this limitation. It never enters runtime input, model prompts or package/image runtime files.
 - LlamaParse/LlamaExtract HTTP protocol tests use mocked responses. Without a provisioned key, no live cloud quality, latency or billing claim is made.
+- Original eight-scenario inputs now exist as ten independent synthetic files. Tests compare L1 fields, original FX IDs/timestamps, isolated source provenance and retained-snapshot replay against the supplied test-only manifest; they do not execute or claim L2 financial outcomes.
 - L2/L3 end-to-end golden financial decisions, authenticated UI, multi-process recovery, production object storage, source-retention policy and production readiness are not validated by these L1 tests.
 
 Before widening automatic readiness, run live adapter tests and independently annotated representative documents, then measure unsafe-ready cases **and** correct useful acceptance. Keep production readiness distinct from a passing synthetic harness.
+
+`npm run l1:evaluate` measures offline status/normalization matches, unsafe-ready count, ready coverage, verified citation count and local p50/p95. Full critical-field accuracy, human annotation sign-off, hosted cost and live provider results remain null/pending where unmeasured. `L1_RUN_LIVE_SMOKE=1 npm run l1:smoke` requires configured hosted credentials and explicitly opts into billable digital-PDF/COP/scan smoke tests. Neither command is part of the runtime package or model input.
