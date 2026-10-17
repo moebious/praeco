@@ -117,7 +117,7 @@ export function createL1(options: L1Options): L1Runtime {
         const safe = error instanceof L1Error ? error : error instanceof ZodError
           ? new L1Error('INVALID_PROVIDER_OUTPUT', 'EXTRACT') : new L1Error('ADAPTER_EXECUTION_FAILED', 'EXTRACT', true);
         return parseEnvelope({ schemaVersion: L1_CONTRACT_VERSION,
-          processingStatus: safe.code === 'INVALID_PROVIDER_OUTPUT' ? 'REJECTED' : ['UNCERTAIN_PACKET_BOUNDARIES', 'UNCERTAIN_DOCUMENT_KIND'].includes(safe.code) ? 'REVIEW_REQUIRED' : 'PROCESSING_FAILED',
+          processingStatus: safe.code === 'INVALID_PROVIDER_OUTPUT' ? 'REJECTED' : ['UNCERTAIN_PACKET_BOUNDARIES', 'UNCERTAIN_DOCUMENT_KIND', 'UNCERTAIN_LINE_ITEM_BOUNDARIES'].includes(safe.code) ? 'REVIEW_REQUIRED' : 'PROCESSING_FAILED',
           envelopeId: `env-${randomUUID()}`, pipelineRunId, source, invoice: null, normalization: null, evidence: [], verification: null,
           artifacts: [...new Map(artifacts.map(a => [a.artifactId, a])).values()], provenance, completedAt: now(),
           errors: [{ code: safe.code, stage: safe.stage, retryable: safe.retryable, message: safe.code }] });

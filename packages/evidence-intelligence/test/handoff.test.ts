@@ -160,4 +160,13 @@ describe('original handoff reconciliation', () => {
     expect(JSON.stringify(reference)).not.toContain('SYN-ACCOUNT');
     expect(() => accountAuditReference(envelope!, Buffer.alloc(5))).toThrow('ACCOUNT_FINGERPRINT_KEY_REQUIRED');
   });
+
+  it('routes uncertain line-item boundaries to review rather than an infrastructure failure', async () => {
+    const { runtime } = await setup();
+    const body = (await sample()) + '\nLine 2 description: A line without its predecessor\nLine 2 quantity: 1\nLine 2 unit price: 8000000\nLine 2 total: 8000000\n';
+    const source = await runtime.register({ tenantId: 'a', bytes: Buffer.from(body), channel: 'CHAT', mimeType: 'text/plain' });
+    const [envelope] = await runtime.process(source);
+    expect(envelope?.processingStatus).toBe('REVIEW_REQUIRED');
+    expect(envelope?.errors[0]?.code).toBe('UNCERTAIN_LINE_ITEM_BOUNDARIES');
+  });
 });
