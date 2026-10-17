@@ -29,7 +29,7 @@ async function add(id: number, ext: string, bytes: Uint8Array | string, channel:
 }
 const ready = 'READY_FOR_POLICY_EVALUATION';
 for (const [index, amount] of ['2200', '480', '2500.01', '1200'].entries())
-  await add(index + 1, 'pdf', await pdf([text(index + 1, 'USD', amount)]), 'PDF', 'application/pdf', 'digital-usd', [ready], [Number(amount).toFixed(2)], 'Explicit labelled digital invoice; L1 does not apply a financial threshold.');
+  await add(index + 1, 'pdf', await pdf([text(index + 1, 'USD', amount) + `\nLine 1 description: Synthetic SaaS services\nLine 1 quantity: 1\nLine 1 unit price: ${amount}\nLine 1 total: ${amount}\n`]), 'PDF', 'application/pdf', 'digital-usd', [ready], [Number(amount).toFixed(2)], 'Explicit labelled digital invoice and source-backed line item; L1 does not apply a financial threshold.');
 for (const [index, amount] of ['2400000', '8000000', '10000000', '12000000', '4000000'].entries())
   await add(index + 5, 'pdf', await pdf([text(index + 5, 'COP', amount).replace('SYNTHETIC INVOICE', 'CUENTA DE COBRO\nSYNTHETIC INVOICE')]), 'PDF', 'application/pdf', 'cop-cuenta', [ready], [(Number(amount) / 4000).toFixed(2)], 'Synthetic cuenta de cobro; original source and fixed COP conversion.');
 const parser = new LiteParse({ ocrEnabled: false });

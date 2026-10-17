@@ -19,6 +19,7 @@ describe('30 distinct synthetic documents: offline evidence acceptance', () => {
     expect(envelopes.map(e => e.processingStatus)).toEqual(fixture.expectedStatuses);
     expect(envelopes.map(e => e.normalization?.usdEquivalent?.amount ?? null)).toEqual(fixture.expectedUsd);
     for (const envelope of envelopes) {
+      if (fixture.category === 'digital-usd') expect(envelope.invoice?.commercial.lineItemsCompleteness).toBe('COMPLETE');
       if (envelope.processingStatus === 'READY_FOR_POLICY_EVALUATION') {
         const loaded = await runtime.reader.loadReady(source.tenantId, envelope.envelopeId);
         expect(loaded.envelope.verification.status).toBe('ACCEPTED');

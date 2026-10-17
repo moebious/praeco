@@ -14,7 +14,7 @@
       "expectedUsd": [
         "2200.00"
       ],
-      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+      "annotation": "Explicit labelled digital invoice and source-backed line item; L1 does not apply a financial threshold."
     },
     {
       "id": "fixture-2",
@@ -28,7 +28,7 @@
       "expectedUsd": [
         "480.00"
       ],
-      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+      "annotation": "Explicit labelled digital invoice and source-backed line item; L1 does not apply a financial threshold."
     },
     {
       "id": "fixture-3",
@@ -42,7 +42,7 @@
       "expectedUsd": [
         "2500.01"
       ],
-      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+      "annotation": "Explicit labelled digital invoice and source-backed line item; L1 does not apply a financial threshold."
     },
     {
       "id": "fixture-4",
@@ -56,7 +56,7 @@
       "expectedUsd": [
         "1200.00"
       ],
-      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+      "annotation": "Explicit labelled digital invoice and source-backed line item; L1 does not apply a financial threshold."
     },
     {
       "id": "fixture-5",

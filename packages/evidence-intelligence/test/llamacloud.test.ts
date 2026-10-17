@@ -13,10 +13,17 @@ function extractionResponse(text: string, withCitations = true) {
     const line = text.split('\n').find(line => line.startsWith(`${label}:`));
     return { field, line, value: line ? line.slice(label.length + 1).trim() : null };
   });
+  const lines = ['description', 'quantity', 'unit price', 'total'].map(label => ({ label,
+    text: text.split('\n').find(line => line.startsWith(`Line 1 ${label}:`)) }));
+  const hasLine = lines.some(line => line.text);
+  const lineKey = (label: string) => ({ description: 'description', quantity: 'quantity', 'unit price': 'unit_price', total: 'line_total' })[label]!;
   return { id: 'ext-synthetic', status: 'COMPLETED',
-    extract_result: { invoices: [Object.fromEntries(pairs.map(p => [p.field, p.value]))] },
-    extract_metadata: { field_metadata: { document_metadata: { invoices: [Object.fromEntries(pairs.map(p => [p.field,
-      { citation: withCitations && p.line ? [{ page: 1, matching_text: p.line }] : [] }]))] } } },
+    extract_result: { invoices: [{ ...Object.fromEntries(pairs.map(p => [p.field, p.value])), line_items: hasLine ? [{ line_number: 1,
+      ...Object.fromEntries(lines.map(line => [lineKey(line.label), line.text?.slice(line.text.indexOf(':') + 1).trim() ?? null])) }] : [] }] },
+    extract_metadata: { field_metadata: { document_metadata: { invoices: [{ ...Object.fromEntries(pairs.map(p => [p.field,
+      { citation: withCitations && p.line ? [{ page: 1, matching_text: p.line }] : [] }])),
+      line_items: hasLine ? [Object.fromEntries(lines.map(line => [lineKey(line.label), { citation: withCitations && line.text ? [{ page: 1, matching_text: line.text }] : [] }]))] : [],
+    }] } } },
     configuration: { version: 'synthetic-wire-test' }, usage: { credits: 0 },
   };
 }
@@ -26,6 +33,22 @@ function transport(handler: (url: URL, init: RequestInit) => Response | Promise<
 }
 
 describe('LlamaCloud wire adapters (mocked HTTP, no live credentials)', () => {
+  it('requests and grounds nested line-item fields with independent arithmetic checks', async () => {
+    const content = (await sample()) + '\nLine 1 description: Engineering services\nLine 1 quantity: 2\nLine 1 unit price: 4000000\nLine 1 total: 8000000\n';
+    const { runtime } = await setup({ llamaCloud: { apiKey: 'test', pollIntervalMs: 0, fetch: transport((url, init) => {
+      if (url.pathname === '/api/v1/beta/files') return json({ id: 'dfl-synthetic' });
+      if (url.pathname === '/api/v2/extract') {
+        expect(JSON.parse(String(init.body)).configuration.data_schema.properties.invoices.items.properties.line_items.type).toBe('array');
+        return json({ id: 'ext-synthetic', status: 'PENDING' });
+      }
+      return json(extractionResponse(content));
+    }) } });
+    const source = await runtime.register({ tenantId: 'a', bytes: Buffer.from(content), channel: 'CHAT', mimeType: 'text/plain' });
+    const [envelope] = await runtime.process(source);
+    expect(envelope?.processingStatus).toBe('READY_FOR_POLICY_EVALUATION');
+    expect(envelope?.invoice?.commercial.lineItemsCompleteness).toBe('COMPLETE');
+    expect(envelope?.invoice?.commercial.lineItems[0]?.unitPrice).toMatchObject({ state: 'OBSERVED', value: { amount: '4000000', currency: 'COP' } });
+  });
   it('uploads original bytes, requests citations and maps actual Extract v2 metadata into verified evidence', async () => {
     const content = await sample(); let postedSchema = false, sawMetadataExpansion = false;
     const { runtime } = await setup({ llamaCloud: { apiKey: 'test-only-not-a-real-key', pollIntervalMs: 0, fetch: transport(async (url, init) => {

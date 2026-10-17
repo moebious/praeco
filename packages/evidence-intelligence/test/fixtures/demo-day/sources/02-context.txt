@@ -1,0 +1,3 @@
+Supplemental context
+Reference: CLOUD-2026-10
+This message accompanies the separate monthly services invoice. Keep the attachment as the primary invoice source.

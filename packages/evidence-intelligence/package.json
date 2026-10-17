@@ -12,7 +12,9 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "demo": "tsx scripts/demo.ts"
+    "demo": "tsx scripts/demo.ts",
+    "evaluate": "tsx scripts/evaluate.ts",
+    "smoke": "tsx scripts/live-smoke.ts"
   },
   "dependencies": {
     "@llamaindex/liteparse": "2.15.1",
