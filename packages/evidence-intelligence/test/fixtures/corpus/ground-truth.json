@@ -1,0 +1,432 @@
+{
+  "annotationStatus": "Machine-authored synthetic expectations reviewed in code; human annotation sign-off pending.",
+  "mode": "offline-labelled-adapter",
+  "cases": [
+    {
+      "id": "fixture-1",
+      "file": "01.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "digital-usd",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+    },
+    {
+      "id": "fixture-2",
+      "file": "02.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "digital-usd",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "480.00"
+      ],
+      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+    },
+    {
+      "id": "fixture-3",
+      "file": "03.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "digital-usd",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2500.01"
+      ],
+      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+    },
+    {
+      "id": "fixture-4",
+      "file": "04.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "digital-usd",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "1200.00"
+      ],
+      "annotation": "Explicit labelled digital invoice; L1 does not apply a financial threshold."
+    },
+    {
+      "id": "fixture-5",
+      "file": "05.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "cop-cuenta",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "600.00"
+      ],
+      "annotation": "Synthetic cuenta de cobro; original source and fixed COP conversion."
+    },
+    {
+      "id": "fixture-6",
+      "file": "06.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "cop-cuenta",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2000.00"
+      ],
+      "annotation": "Synthetic cuenta de cobro; original source and fixed COP conversion."
+    },
+    {
+      "id": "fixture-7",
+      "file": "07.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "cop-cuenta",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2500.00"
+      ],
+      "annotation": "Synthetic cuenta de cobro; original source and fixed COP conversion."
+    },
+    {
+      "id": "fixture-8",
+      "file": "08.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "cop-cuenta",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "3000.00"
+      ],
+      "annotation": "Synthetic cuenta de cobro; original source and fixed COP conversion."
+    },
+    {
+      "id": "fixture-9",
+      "file": "09.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "cop-cuenta",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "1000.00"
+      ],
+      "annotation": "Synthetic cuenta de cobro; original source and fixed COP conversion."
+    },
+    {
+      "id": "fixture-10",
+      "file": "10.png",
+      "channel": "IMAGE",
+      "mimeType": "image/png",
+      "category": "raster-invoice",
+      "expectedStatuses": [
+        "PROCESSING_FAILED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Actual rasterized invoice. Offline corpus expects no hosted parser; this is not a passing OCR test. Hosted OCR must remain review-required."
+    },
+    {
+      "id": "fixture-11",
+      "file": "11.png",
+      "channel": "IMAGE",
+      "mimeType": "image/png",
+      "category": "raster-invoice",
+      "expectedStatuses": [
+        "PROCESSING_FAILED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Actual rasterized invoice. Offline corpus expects no hosted parser; this is not a passing OCR test. Hosted OCR must remain review-required."
+    },
+    {
+      "id": "fixture-12",
+      "file": "12.png",
+      "channel": "IMAGE",
+      "mimeType": "image/png",
+      "category": "raster-invoice",
+      "expectedStatuses": [
+        "PROCESSING_FAILED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Actual rasterized invoice. Offline corpus expects no hosted parser; this is not a passing OCR test. Hosted OCR must remain review-required."
+    },
+    {
+      "id": "fixture-13",
+      "file": "13.png",
+      "channel": "IMAGE",
+      "mimeType": "image/png",
+      "category": "raster-invoice",
+      "expectedStatuses": [
+        "PROCESSING_FAILED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Actual rasterized invoice. Offline corpus expects no hosted parser; this is not a passing OCR test. Hosted OCR must remain review-required."
+    },
+    {
+      "id": "fixture-14",
+      "file": "14.txt",
+      "channel": "EMAIL",
+      "mimeType": "text/plain",
+      "category": "native-text",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Plain UTF-8 body snapshot, not a MIME mailbox adapter."
+    },
+    {
+      "id": "fixture-15",
+      "file": "15.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "native-text",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Plain UTF-8 body snapshot, not a MIME mailbox adapter."
+    },
+    {
+      "id": "fixture-16",
+      "file": "16.txt",
+      "channel": "EMAIL",
+      "mimeType": "text/plain",
+      "category": "native-text",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Plain UTF-8 body snapshot, not a MIME mailbox adapter."
+    },
+    {
+      "id": "fixture-17",
+      "file": "17.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "native-text",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "3800.00"
+      ],
+      "annotation": "Plain UTF-8 body snapshot, not a MIME mailbox adapter."
+    },
+    {
+      "id": "fixture-18",
+      "file": "18.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "mixed-packet",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION",
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00",
+        "3800.00"
+      ],
+      "annotation": "Two explicit single-page invoices; each citation must remain within its original page segment."
+    },
+    {
+      "id": "fixture-19",
+      "file": "19.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "mixed-packet",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION",
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00",
+        "3800.00"
+      ],
+      "annotation": "Two explicit single-page invoices; each citation must remain within its original page segment."
+    },
+    {
+      "id": "fixture-20",
+      "file": "20.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "category": "mixed-packet",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION",
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00",
+        "3800.00"
+      ],
+      "annotation": "Two explicit single-page invoices; each citation must remain within its original page segment."
+    },
+    {
+      "id": "fixture-21",
+      "file": "21.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "contradictory",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Conflicting source values or inconsistent arithmetic must never be ready."
+    },
+    {
+      "id": "fixture-22",
+      "file": "22.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "contradictory",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Conflicting source values or inconsistent arithmetic must never be ready."
+    },
+    {
+      "id": "fixture-23",
+      "file": "23.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "contradictory",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Conflicting source values or inconsistent arithmetic must never be ready."
+    },
+    {
+      "id": "fixture-24",
+      "file": "24.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "contradictory",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Conflicting source values or inconsistent arithmetic must never be ready."
+    },
+    {
+      "id": "fixture-25",
+      "file": "25.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "missing-corrupt-account",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Missing critical account requires review even when normalization succeeds."
+    },
+    {
+      "id": "fixture-26",
+      "file": "26.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "missing-corrupt-account",
+      "expectedStatuses": [
+        "PROCESSING_FAILED"
+      ],
+      "expectedUsd": [
+        null
+      ],
+      "annotation": "Invalid UTF-8 cannot be extracted or cited."
+    },
+    {
+      "id": "fixture-27",
+      "file": "27.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "missing-corrupt-account",
+      "expectedStatuses": [
+        "READY_FOR_POLICY_EVALUATION"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "A changed but source-backed account remains an L1 fact. L2 must compare with its trusted directory."
+    },
+    {
+      "id": "fixture-28",
+      "file": "28.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "prompt-injection",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Instructions are document data. No authority or financial authorization is available to L1."
+    },
+    {
+      "id": "fixture-29",
+      "file": "29.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "prompt-injection",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Instructions are document data. No authority or financial authorization is available to L1."
+    },
+    {
+      "id": "fixture-30",
+      "file": "30.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "category": "prompt-injection",
+      "expectedStatuses": [
+        "REVIEW_REQUIRED"
+      ],
+      "expectedUsd": [
+        "2200.00"
+      ],
+      "annotation": "Instructions are document data. No authority or financial authorization is available to L1."
+    }
+  ]
+}

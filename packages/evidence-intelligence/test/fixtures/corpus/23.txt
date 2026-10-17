@@ -1,0 +1,21 @@
+SYNTHETIC INVOICE - NOT A REAL COMPANY OR PAYMENT
+Invoice number: SYN-023
+Issue date: 2026-10-01
+Due date: 2026-10-31
+Period start: 2026-10-01
+Period end: 2026-10-31
+Beneficiary: Synthetic Bogota Studio
+Tax ID: SYN-TAX-001
+Payment rail: BANK
+Account: SYN-ACCOUNT-001
+Contract: SYN-CONTRACT-001
+Description: Synthetic software services
+Currency: USD
+Subtotal: 2200
+Taxes: 0
+Discounts: 0
+Total due: 2200
+Already paid: 0
+Outstanding balance: 2200
+
+Currency: MXN
