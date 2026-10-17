@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { ArtifactRef, DocumentSource, InvoiceEnvelope } from './contracts.js';
 import { canonicalJson, digest, L1Error, sha256 } from './integrity.js';
 import { DocumentSourceSchema, IdSchema, parseEnvelope } from './schemas.js';
+import type { ImmutablePersistencePort } from './ports.js';
 
 export interface SourceInput {
   tenantId: string;
@@ -23,9 +24,10 @@ export interface ArtifactBinding {
 /** Server-only store. Never give agents raw storage access or an arbitrary write tool. */
 export class FileEvidenceStore {
   readonly root: string;
-  constructor(root: string, private readonly now = () => new Date().toISOString()) { this.root = resolve(root); }
+  constructor(root: string, private readonly now = () => new Date().toISOString(), private readonly persistence?: ImmutablePersistencePort) { this.root = resolve(root); }
 
   private async writeOnce(key: string, bytes: Uint8Array): Promise<void> {
+    if (this.persistence) { await this.persistence.put(key, new Uint8Array(bytes)); return; }
     // Keys are constructed internally, never accepted from storageKey values or URLs.
     const target = join(this.root, key);
     await mkdir(join(target, '..'), { recursive: true, mode: 0o700 });
@@ -38,6 +40,17 @@ export class FileEvidenceStore {
       if (!existing.equals(Buffer.from(bytes))) throw new L1Error('IMMUTABLE_RECORD_CONFLICT', 'INTAKE');
     } finally { await unlink(temp); }
   }
+  private async readKey(key: string): Promise<Buffer | null> {
+    if (this.persistence) {
+      const bytes = await this.persistence.get(key);
+      return bytes === null ? null : Buffer.from(bytes);
+    }
+    try { return await readFile(join(this.root, key)); }
+    catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
   private namespace(tenantId: string): string { return sha256(IdSchema.parse(tenantId)); }
   private recordKey(tenantId: string, kind: string, id: string): string {
     return `records/${this.namespace(tenantId)}/${kind}/${sha256(id)}.json`;
@@ -46,7 +59,10 @@ export class FileEvidenceStore {
     await this.writeOnce(this.recordKey(tenantId, kind, id), Buffer.from(canonicalJson(value)));
   }
   async lookup(tenantId: string, kind: 'sources' | 'origins' | 'bindings' | 'receipts' | 'runs', id: string): Promise<unknown | null> {
-    try { return JSON.parse(await readFile(join(this.root, this.recordKey(tenantId, kind, id)), 'utf8')) as unknown; }
+    try {
+      const bytes = await this.readKey(this.recordKey(tenantId, kind, id));
+      return bytes === null ? null : JSON.parse(bytes.toString('utf8')) as unknown;
+    }
     catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
       throw new L1Error('STORE_RECORD_INVALID', 'VERIFY');
@@ -60,7 +76,11 @@ export class FileEvidenceStore {
   async blob(tenantId: string, hash: string): Promise<Buffer> {
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new L1Error('INVALID_ARTIFACT_HASH', 'VERIFY');
     let bytes: Buffer;
-    try { bytes = await readFile(join(this.root, `objects/${this.namespace(tenantId)}/${hash}`)); }
+    try {
+      const stored = await this.readKey(`objects/${this.namespace(tenantId)}/${hash}`);
+      if (!stored) throw new L1Error('ARTIFACT_UNAVAILABLE', 'VERIFY');
+      bytes = stored;
+    }
     catch { throw new L1Error('ARTIFACT_UNAVAILABLE', 'VERIFY'); }
     if (sha256(bytes) !== hash) throw new L1Error('ARTIFACT_HASH_MISMATCH', 'VERIFY');
     return bytes;

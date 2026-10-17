@@ -18,7 +18,8 @@ try {
   } } : {}) });
   const source = await runtime.register({ tenantId: values.tenant, bytes: await readFile(file), channel: channel as 'PDF' | 'IMAGE' | 'EMAIL' | 'CHAT', mimeType: values.mime });
   const envelopes = await runtime.process(source);
-  console.log(JSON.stringify(envelopes.map(summarize), null, 2));
+  console.log(JSON.stringify(envelopes.length ? envelopes.map(summarize)
+    : { sourceId: source.sourceId, sourceHashSha256: source.sourceHashSha256, sourceDisposition: 'SUPPLEMENTAL_CONTEXT', envelopes: [] }, null, 2));
   if (envelopes.some(e => e.processingStatus === 'PROCESSING_FAILED')) process.exitCode = 2;
 } catch (error) {
   console.error(JSON.stringify({ error: error instanceof L1Error ? error.code : 'L1_COMMAND_FAILED' })); process.exitCode = 1;

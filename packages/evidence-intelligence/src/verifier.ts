@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 import type { DocumentSource, FinancialNormalization, InvoicePayload, VerificationCheck, VerificationReport, EvidenceReference } from './contracts.js';
 import type { ExtractionDraft, ParsedDocument } from './ports.js';
 import { digest, L1Error, sliceUtf8 } from './integrity.js';
-import { FIELD_LABELS } from './extraction.js';
+import { FIELD_LABELS, labelsForField } from './extraction.js';
 import { EvidenceSchema, InvoicePayloadSchema, SegmentSchema } from './schemas.js';
 import { FileEvidenceStore } from './store.js';
 import { normalize } from './money.js';
 import type { FxRateSnapshot } from './contracts.js';
+import { sourceDateToIso } from './dates.js';
 
-export const VERIFIER_VERSION = 'source-grounding-v1';
+export const VERIFIER_VERSION = 'source-grounding-v2';
 export const DEFAULT_CRITICAL_FIELDS: readonly string[] = Object.freeze([
   'invoice.number', 'invoice.dueDate', 'beneficiary.legalName', 'beneficiary.taxId',
   'beneficiary.paymentAccount', 'financials.currency', 'financials.totalDue',
@@ -32,7 +33,7 @@ function supports(text: string, value: string): boolean {
   return new RegExp(`(?<![\\p{L}\\p{N}.,])${escaped}(?![\\p{L}\\p{N}.,])`, 'u').test(text);
 }
 function labelForPath(path: string): readonly string[] {
-  return FIELD_LABELS[path.endsWith('.currency') ? 'financials.currency' : path] ?? [];
+  return labelsForField(path);
 }
 interface ResolvedCitation { text: string; contextLabel: string | null; page: number }
 
@@ -85,7 +86,9 @@ export class EvidenceVerifier {
       if (field.evidenceIds.some(id => !resolved.has(id))) { add('FIELD_EVIDENCE_UNRESOLVED', 'FAIL', 'CRITICAL', [field.path], [...field.evidenceIds]); continue; }
       for (const leaf of leaves(field.value, field.path)) {
         const citations = field.evidenceIds.map(id => resolved.get(id)!);
-        const supporting = citations.filter(c => supports(c.text, leaf.value));
+        const datePath = ['invoice.issueDate', 'invoice.dueDate', 'invoice.billingPeriod.start', 'invoice.billingPeriod.end'].includes(leaf.path);
+        const supporting = citations.filter(c => supports(c.text, leaf.value) || (datePath && c.contextLabel !== null
+          && sourceDateToIso(c.text.includes(':') ? c.text.slice(c.text.indexOf(':') + 1).trim() : c.text, c.contextLabel) === leaf.value));
         if (supporting.length === 0) { add('FIELD_VALUE_NOT_SUPPORTED', 'FAIL', 'CRITICAL', [leaf.path], [...field.evidenceIds]); continue; }
         const expectedLabels = labelForPath(leaf.path);
         if (expectedLabels.length === 0 || !supporting.some(c => c.contextLabel !== null && expectedLabels.includes(c.contextLabel)))
