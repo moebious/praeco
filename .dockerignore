@@ -1,0 +1,11 @@
+.git
+node_modules
+**/node_modules
+**/dist
+.cache
+.env
+.env.*
+!.env.example
+**/test
+**/scripts
+outputs

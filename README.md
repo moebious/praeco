@@ -10,7 +10,7 @@ Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Bl
 
 | Component | Ownership | Status |
 | --- | --- | --- |
-| **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | **initial contract/design baseline accepted**; implementation pending |
+| **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | Local runtime and LlamaIndex adapters implemented; live cloud/OCR validation pending |
 | **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Specification/implementation pending |
 | **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Design in progress |
 | **DEMO-001 · Synthetic AP Environment** | Test fixtures, reference data, seed/reset/replay and test-only oracle | Handoff prepared; integration pending |
@@ -31,7 +31,11 @@ docs/              # Architecture decisions and specifications
 scripts/           # Development and repository checks
 ```
 
-Directories are added as their implementations land; this initial commit sets the guardrails.
+Directories are added as their implementations land. The accepted L1 wire contract is preserved.
+
+## Run L1
+
+Use Node 22.12+ and npm. Run `npm ci`, `npm run check`, and `npm run l1:demo` for a synthetic offline invoice. See the [L1 provisioning and integration guide](docs/architecture/l1-runtime.md) for hosted LlamaParse/LlamaExtract configuration and L2/L3 handoff. The offline extractor is explicitly labelled; passing local tests does not establish hosted OCR accuracy or financial authorization safety.
 
 ## Contribution workflow
 
