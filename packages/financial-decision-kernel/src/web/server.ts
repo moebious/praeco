@@ -1,0 +1,250 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import {
+  createScenarioStore,
+  FinancialAuthorizationService,
+  DEMO_TENANT_ID,
+  type EnvelopeResolver,
+  type ReadyInvoiceEnvelope,
+  type TrustedActorContext,
+} from '../index.js';
+import { renderDashboardHtml } from './html.js';
+import { buildScenarios } from '../cli.js';
+
+class WebEnvelopeResolver implements EnvelopeResolver {
+  private readonly store = new Map<string, ReadyInvoiceEnvelope>();
+
+  public register(envelope: ReadyInvoiceEnvelope) {
+    this.store.set(envelope.envelopeId, envelope);
+  }
+
+  public async resolveEnvelopes(
+    tenantId: string,
+    envelopeIds: readonly string[]
+  ): Promise<readonly ReadyInvoiceEnvelope[]> {
+    return envelopeIds.map(id => {
+      const env = this.store.get(id);
+      if (!env || env.source.tenantId !== tenantId) {
+        throw new Error(`ENVELOPE_NOT_FOUND: ${id}`);
+      }
+      return env;
+    });
+  }
+}
+
+interface WebState {
+  rules: {
+    maxAutoApproveUsd: string;
+    defaultRecurringTolerancePct: string;
+    budgetUsd: string;
+    spentUsd: string;
+  };
+  activeServices: Map<string, { service: FinancialAuthorizationService; approvalRequestId?: string }>;
+}
+
+const state: WebState = {
+  rules: {
+    maxAutoApproveUsd: '2500.00',
+    defaultRecurringTolerancePct: '5.00',
+    budgetUsd: '5000.00',
+    spentUsd: '0.00',
+  },
+  activeServices: new Map(),
+};
+
+const workerActor: TrustedActorContext = {
+  tenantId: DEMO_TENANT_ID,
+  principalId: 'worker-agent-demo',
+  roles: ['WorkerAgent'],
+};
+
+const cfoActor: TrustedActorContext = {
+  tenantId: DEMO_TENANT_ID,
+  principalId: 'cfo-finance-admin',
+  roles: ['FinanceAdmin'],
+};
+
+async function parseBody(req: IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => (body += chunk));
+    req.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+function sendJson(res: ServerResponse, statusCode: number, data: unknown) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  });
+  res.end(JSON.stringify(data));
+}
+
+export function startWebServer(port = Number(process.env.PORT || 3000)) {
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      });
+      res.end();
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(renderDashboardHtml());
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/rules') {
+      sendJson(res, 200, state.rules);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/rules') {
+      try {
+        const body = await parseBody(req);
+        if (body.maxAutoApproveUsd) state.rules.maxAutoApproveUsd = body.maxAutoApproveUsd;
+        if (body.defaultRecurringTolerancePct) state.rules.defaultRecurringTolerancePct = body.defaultRecurringTolerancePct;
+        if (body.budgetUsd) state.rules.budgetUsd = body.budgetUsd;
+        sendJson(res, 200, state.rules);
+      } catch (err: any) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/reset') {
+      state.activeServices.clear();
+      state.rules.spentUsd = '0.00';
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/run-all') {
+      try {
+        const scenarios = buildScenarios();
+        state.activeServices.clear();
+        let totalSpent = 0;
+        const results = [];
+
+        for (const s of scenarios) {
+          const store = createScenarioStore(s.id);
+          // Apply custom rules if configured
+          store.policy.maxAutoApproveUsd = state.rules.maxAutoApproveUsd;
+          store.policy.defaultRecurringTolerancePct = state.rules.defaultRecurringTolerancePct;
+
+          const resolver = new WebEnvelopeResolver();
+          resolver.register(s.envelope);
+          const service = new FinancialAuthorizationService(store, resolver);
+
+          const record = await service.decideAndCommit(
+            {
+              proposal: {
+                payableCaseId: `case-${s.id.toLowerCase()}`,
+                envelopeIds: [s.envelope.envelopeId],
+              },
+              idempotencyKey: `idem-web-${s.id}-${Date.now()}`,
+              workerId: 'worker-agent-demo',
+              agentGrantRef: 'grant-synthetic-worker',
+            },
+            workerActor
+          );
+
+          if (record.outcome === 'AUTHORIZED_SIMULATED') {
+            const payable = s.envelope.normalization.candidatePayable!;
+            const usd = payable.currency === 'USD' ? Number(payable.amount) : Number(payable.amount) / (payable.currency === 'COP' ? 4000 : 20);
+            totalSpent += usd;
+          }
+
+          state.activeServices.set(s.id, {
+            service,
+            approvalRequestId: record.approvalRequestId ?? undefined,
+          });
+
+          results.push({
+            scenarioId: s.id,
+            title: s.title,
+            claim: s.claim,
+            expected: s.expected,
+            ...record,
+          });
+        }
+
+        state.rules.spentUsd = totalSpent.toFixed(2);
+        sendJson(res, 200, { decisions: results, spentUsd: state.rules.spentUsd });
+      } catch (err: any) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/approve') {
+      try {
+        const { approvalRequestId, scenarioId } = await parseBody(req);
+        const entry = state.activeServices.get(scenarioId);
+        if (!entry) throw new Error('SESSION_NOT_FOUND');
+
+        const record = await entry.service.resolveApproval(
+          {
+            approvalRequestId,
+            idempotencyKey: `idem-approve-${approvalRequestId}`,
+            action: 'APPROVE',
+          },
+          cfoActor
+        );
+
+        // Update spent
+        state.rules.spentUsd = (Number(state.rules.spentUsd) + 3800).toFixed(2);
+        sendJson(res, 200, record);
+      } catch (err: any) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/reject') {
+      try {
+        const { approvalRequestId, scenarioId } = await parseBody(req);
+        const entry = state.activeServices.get(scenarioId);
+        if (!entry) throw new Error('SESSION_NOT_FOUND');
+
+        const record = await entry.service.resolveApproval(
+          {
+            approvalRequestId,
+            idempotencyKey: `idem-reject-${approvalRequestId}`,
+            action: 'REJECT',
+          },
+          cfoActor
+        );
+        sendJson(res, 200, record);
+      } catch (err: any) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
+    sendJson(res, 404, { error: 'NOT_FOUND' });
+  });
+
+  server.listen(port, () => {
+    console.log(`\n🚀 Praeco Financial Dashboard running on http://localhost:${port}\n`);
+  });
+
+  return server;
+}
+
+if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!)) {
+  startWebServer();
+}

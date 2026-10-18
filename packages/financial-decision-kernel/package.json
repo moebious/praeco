@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo": "tsx src/cli.ts",
+    "web": "tsx src/web/server.ts"
   },
   "dependencies": {
     "@praeco/evidence-intelligence": "1.0.0",

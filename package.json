@@ -11,10 +11,15 @@
     "test": "npm run test --workspaces --if-present",
     "test:l1": "npm run test --workspace @praeco/evidence-intelligence",
     "test:l1:integration": "npm run test --workspace @praeco/external-document-intake",
+    "test:l2": "npm run test --workspace @praeco/financial-decision-kernel",
     "l1:demo": "npm run demo --workspace @praeco/evidence-intelligence",
     "l1:process": "node packages/evidence-intelligence/dist/cli.js",
     "l1:evaluate": "npm run evaluate --workspace @praeco/evidence-intelligence",
     "l1:smoke": "npm run smoke --workspace @praeco/evidence-intelligence",
+    "l2:demo": "npm run demo --workspace @praeco/financial-decision-kernel",
+    "l2:web": "npm run web --workspace @praeco/financial-decision-kernel",
+    "demo": "npm run demo --workspace @praeco/financial-decision-kernel",
+    "web": "npm run web --workspace @praeco/financial-decision-kernel",
     "check": "npm run typecheck && npm test && npm run build"
   }
 }
