@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  BudgetDirectoryEntry,
   FinancialDecisionCommand,
   FinancialDecisionRecord,
   FinancialEvaluation,
@@ -9,6 +10,7 @@ import type {
   TrustedFinancialContext,
 } from './types.js';
 import type { TransactionalFinancialStore } from './store.js';
+import type { AuthoritativeCommitPort } from './commit-port.js';
 import { evaluatePayable } from './kernel.js';
 import { canonicalJson, digest } from './hashing.js';
 import { decimal, toUsdExact } from './decimal.js';
@@ -24,7 +26,14 @@ export class FinancialAuthorizationService {
     /** Public read access is intentional: the store exposes auditable state for trusted callers (dashboard aggregation). */
     public readonly store: TransactionalFinancialStore,
     private readonly envelopeResolver: EnvelopeResolver,
-    private readonly now: () => string = () => new Date().toISOString()
+    private readonly now: () => string = () => new Date().toISOString(),
+    /**
+     * Authoritative commit backend (ADR-003). When set, both ledger commit
+     * paths delegate the durable race-safe mutation to the port and the
+     * in-memory store mirrors the authoritative outcome. Unset (default), the
+     * in-memory ledger remains the demo backend.
+     */
+    private readonly commitPort?: AuthoritativeCommitPort
   ) {}
 
   public async preview(
@@ -96,81 +105,153 @@ export class FinancialAuthorizationService {
 
       // 4. Handle outcome mutations atomically
       if (evalResult.outcome === 'AUTHORIZED_SIMULATED') {
-        // Concurrency race guard on unique obligation constraint (L2-2)
-        const priorObligation = this.store.obligations.get(canonicalKey);
-        if (priorObligation) {
-          // Race loser
-          const loserEval: FinancialEvaluation = {
+        const budget =
+          this.store.budgets.get(period) ?? Array.from(this.store.budgets.values()).find(b => b.period === period);
+
+        if (this.commitPort) {
+          // Authoritative path (ADR-003): the backend transaction owns
+          // idempotency, the obligation claim, the budget debit and the
+          // durable records; the in-memory store mirrors the outcome.
+          commitmentId = `cmt-${randomUUID()}`;
+          const portRecord: FinancialDecisionRecord = {
             ...evalResult,
-            outcome: 'BLOCKED',
-            explanation: 'Cobro duplicado detectado al intentar comprometer fondos.',
-            gateChecks: evalResult.gateChecks.map(c =>
-              c.gate === 'G2'
-                ? {
-                    ...c,
-                    status: 'FAIL',
-                    code: 'G2_DUPLICATE',
-                    explanation: 'Conflicto de concurrencia: la obligación ya fue autorizada por otra transacción.',
-                  }
-                : c
-            ),
-          };
-          const decisionRecord: FinancialDecisionRecord = {
-            ...loserEval,
             decisionId,
             tenantId: actor.tenantId,
             payableId,
             occurredAt,
-            commitmentId: null,
+            commitmentId,
             approvalRequestId: null,
           };
-          this.store.decisions.set(decisionId, decisionRecord);
-          this.store.receipts.set(command.idempotencyKey, {
+          const portResult = await this.commitPort.commitAuthorizedPayable({
             tenantId: actor.tenantId,
+            decisionId,
+            commitmentId,
+            canonicalKey,
+            intentDigestSha256: evalResult.intentDigestSha256,
+            amountUsd: unroundedUsd.toString(),
+            budgetId: budget?.budgetId ?? 'UNKNOWN',
             idempotencyKey: command.idempotencyKey,
             payloadDigest,
-            decisionId,
-            recordedAt: occurredAt,
+            decisionRecord: portRecord,
+            occurredAt,
           });
-          return decisionRecord;
+
+          this.syncBudgetMirror(budget, portResult.budgetCommittedUsd);
+
+          if (portResult.status === 'IDEMPOTENT_REPLAY') {
+            const replayed = portResult.decisionRecord;
+            this.mirrorAuthorizedCommit({
+              canonicalKey,
+              intentDigestSha256: replayed.intentDigestSha256,
+              amountUsd: unroundedUsd.toString(),
+              commitmentId: replayed.commitmentId ?? commitmentId,
+              budgetId: budget?.budgetId ?? 'UNKNOWN',
+              decisionId: replayed.decisionId,
+              tenantId: actor.tenantId,
+              occurredAt,
+            });
+            this.store.receipts.set(command.idempotencyKey, {
+              tenantId: actor.tenantId,
+              idempotencyKey: command.idempotencyKey,
+              payloadDigest,
+              decisionId: replayed.decisionId,
+              recordedAt: occurredAt,
+            });
+            this.store.decisions.set(replayed.decisionId, replayed);
+            return replayed;
+          }
+
+          if (
+            portResult.status === 'DUPLICATE_OBLIGATION' ||
+            portResult.status === 'CONFLICTING_OBLIGATION'
+          ) {
+            return this.recordDuplicateLoser(evalResult, {
+              decisionId,
+              tenantId: actor.tenantId,
+              payableId,
+              occurredAt,
+              idempotencyKey: command.idempotencyKey,
+              payloadDigest,
+              conflictingIntent: portResult.status === 'CONFLICTING_OBLIGATION',
+            });
+          }
+
+          if (portResult.status === 'INSUFFICIENT_BUDGET') {
+            return this.recordConcurrentExhaustion(evalResult, {
+              decisionId,
+              tenantId: actor.tenantId,
+              payableId,
+              occurredAt,
+              idempotencyKey: command.idempotencyKey,
+              payloadDigest,
+              availableUsd: portResult.availableUsd,
+            });
+          }
+
+          // COMMITTED: mirror the authoritative outcome in memory.
+          this.mirrorAuthorizedCommit({
+            canonicalKey,
+            intentDigestSha256: evalResult.intentDigestSha256,
+            amountUsd: unroundedUsd.toString(),
+            commitmentId,
+            budgetId: budget?.budgetId ?? 'UNKNOWN',
+            decisionId,
+            tenantId: actor.tenantId,
+            occurredAt,
+          });
+          if (budget) budget.revision += 1;
+        } else {
+          // In-memory authoritative path (demo default).
+          // Concurrency race guard on unique obligation constraint (L2-2)
+          const priorObligation = this.store.obligations.get(canonicalKey);
+          if (priorObligation) {
+            return this.recordDuplicateLoser(evalResult, {
+              decisionId,
+              tenantId: actor.tenantId,
+              payableId,
+              occurredAt,
+              idempotencyKey: command.idempotencyKey,
+              payloadDigest,
+              conflictingIntent: priorObligation.intentDigestSha256 !== evalResult.intentDigestSha256,
+            });
+          }
+
+          // Debit budget
+          if (budget) {
+            budget.committedUsd = decimal(budget.committedUsd).plus(unroundedUsd).toString();
+            budget.revision += 1;
+          }
+
+          // Commit obligation
+          this.store.obligations.set(canonicalKey, {
+            obligationId: `ob-${randomUUID()}`,
+            tenantId: actor.tenantId,
+            canonicalKey,
+            intentDigestSha256: evalResult.intentDigestSha256,
+            status: 'COMMITTED',
+            committedUsd: unroundedUsd.toString(),
+            authorizedAt: occurredAt,
+          });
+
+          commitmentId = `cmt-${randomUUID()}`;
+          this.store.commitments.set(commitmentId, {
+            commitmentId,
+            tenantId: actor.tenantId,
+            canonicalPayableKey: canonicalKey,
+            budgetId: budget?.budgetId ?? 'UNKNOWN',
+            unroundedUsd: unroundedUsd.toString(),
+            decisionId,
+            committedAt: occurredAt,
+          });
+
+          this.store.ledgerEvents.push({
+            eventId: `evt-${randomUUID()}`,
+            tenantId: actor.tenantId,
+            eventType: 'SIMULATED_AUTHORIZATION_COMMITTED',
+            payload: { decisionId, canonicalKey, unroundedUsd: unroundedUsd.toString() },
+            occurredAt,
+          });
         }
-
-        // Debit budget
-        const budget = this.store.budgets.get(period) ?? Array.from(this.store.budgets.values()).find(b => b.period === period);
-        if (budget) {
-          budget.committedUsd = decimal(budget.committedUsd).plus(unroundedUsd).toString();
-          budget.revision += 1;
-        }
-
-        // Commit obligation
-        this.store.obligations.set(canonicalKey, {
-          obligationId: `ob-${randomUUID()}`,
-          tenantId: actor.tenantId,
-          canonicalKey,
-          intentDigestSha256: evalResult.intentDigestSha256,
-          status: 'COMMITTED',
-          committedUsd: unroundedUsd.toString(),
-          authorizedAt: occurredAt,
-        });
-
-        commitmentId = `cmt-${randomUUID()}`;
-        this.store.commitments.set(commitmentId, {
-          commitmentId,
-          tenantId: actor.tenantId,
-          canonicalPayableKey: canonicalKey,
-          budgetId: budget?.budgetId ?? 'UNKNOWN',
-          unroundedUsd: unroundedUsd.toString(),
-          decisionId,
-          committedAt: occurredAt,
-        });
-
-        this.store.ledgerEvents.push({
-          eventId: `evt-${randomUUID()}`,
-          tenantId: actor.tenantId,
-          eventType: 'SIMULATED_AUTHORIZATION_COMMITTED',
-          payload: { decisionId, canonicalKey, unroundedUsd: unroundedUsd.toString() },
-          occurredAt,
-        });
       } else if (evalResult.outcome === 'PENDING_HUMAN_APPROVAL') {
         approvalRequestId = `appr-${randomUUID()}`;
         const expiresAt = new Date(Date.parse(occurredAt) + 24 * 60 * 60 * 1000).toISOString();
@@ -366,12 +447,172 @@ export class FinancialAuthorizationService {
       }
 
       // All gates pass: consume one-off threshold exception
+      const unroundedUsd = decimal(request.unroundedUsd);
+
+      if (this.commitPort) {
+        // Authoritative path (ADR-003): the approval resolution commits
+        // through the backend transaction, so concurrent duplicates or budget
+        // exhaustion during the wait cannot slip past the human exception.
+        const commitmentId = `cmt-${randomUUID()}`;
+        const approvedRecord: FinancialDecisionRecord = {
+          outcome: 'AUTHORIZED_SIMULATED',
+          explanation: 'Pago simulado autorizado con excepción aprobada por FinanceAdmin.',
+          gateChecks: freshEval.gateChecks.map(c =>
+            c.gate === 'G6'
+              ? {
+                  ...c,
+                  status: 'PASS',
+                  code: 'HUMAN_APPROVAL_GRANTED',
+                  explanation: `Aprobación humana otorgada por ${actor.principalId}.`,
+                }
+              : c
+          ),
+          financialContextDigest: freshEval.financialContextDigest,
+          intentDigestSha256: freshEval.intentDigestSha256,
+          policyRevisionId: this.store.policy.policyRevisionId,
+          grantRevisionId: workerGrant?.grantRevisionId ?? 'human-approved',
+          decisionId,
+          tenantId: actor.tenantId,
+          payableId,
+          occurredAt: currentTime,
+          commitmentId,
+          approvalRequestId: request.approvalRequestId,
+        };
+        const portResult = await this.commitPort.commitAuthorizedPayable({
+          tenantId: actor.tenantId,
+          decisionId,
+          commitmentId,
+          canonicalKey: request.canonicalPayableKey,
+          intentDigestSha256: request.intentDigestSha256,
+          amountUsd: unroundedUsd.toString(),
+          budgetId: budget.budgetId,
+          idempotencyKey: command.idempotencyKey,
+          payloadDigest,
+          decisionRecord: approvedRecord,
+          occurredAt: currentTime,
+        });
+
+        this.syncBudgetMirror(budget, portResult.budgetCommittedUsd);
+
+        if (
+          portResult.status === 'DUPLICATE_OBLIGATION' ||
+          portResult.status === 'CONFLICTING_OBLIGATION' ||
+          portResult.status === 'INSUFFICIENT_BUDGET'
+        ) {
+          // A concurrent transaction claimed the payable or exhausted the
+          // budget during the wait: the approval is not consumed and stays
+          // retryable.
+          const duplicate =
+            portResult.status === 'DUPLICATE_OBLIGATION' ||
+            portResult.status === 'CONFLICTING_OBLIGATION';
+          const conflictingIntent = portResult.status === 'CONFLICTING_OBLIGATION';
+          const record: FinancialDecisionRecord = {
+            ...freshEval,
+            outcome: 'BLOCKED',
+            explanation: duplicate
+              ? conflictingIntent
+                ? 'Aprobación no consumida: existe una obligación concurrente con intención financiera distinta.'
+                : 'Aprobación no consumida: la obligación fue autorizada concurrentemente por otra transacción.'
+              : 'Aprobación no consumida: el presupuesto fue agotado concurrentemente en el almacén autoritativo.',
+            gateChecks: freshEval.gateChecks.map(c =>
+              duplicate
+                ? c.gate === 'G2'
+                  ? {
+                      ...c,
+                      status: 'FAIL',
+                      code: conflictingIntent ? 'G2_CONFLICT' : 'G2_DUPLICATE',
+                      explanation: conflictingIntent
+                        ? 'Conflicto de concurrencia: la obligación existente tiene una intención financiera distinta.'
+                        : 'Conflicto de concurrencia: la obligación ya fue autorizada por otra transacción.',
+                    }
+                  : c
+                : c.gate === 'G5'
+                  ? {
+                      ...c,
+                      status: 'FAIL',
+                      code: 'BUDGET_EXHAUSTED',
+                      explanation: 'Presupuesto agotado de forma concurrente en el almacén autoritativo.',
+                    }
+                  : c
+            ),
+            decisionId,
+            tenantId: actor.tenantId,
+            payableId,
+            occurredAt: currentTime,
+            commitmentId: null,
+            approvalRequestId: request.approvalRequestId,
+          };
+          this.store.decisions.set(decisionId, record);
+          return record;
+        }
+
+        if (portResult.status === 'IDEMPOTENT_REPLAY') {
+          const replayed = portResult.decisionRecord;
+          this.mirrorAuthorizedCommit({
+            canonicalKey: request.canonicalPayableKey,
+            intentDigestSha256: replayed.intentDigestSha256,
+            amountUsd: unroundedUsd.toString(),
+            commitmentId: replayed.commitmentId ?? commitmentId,
+            budgetId: budget.budgetId,
+            decisionId: replayed.decisionId,
+            tenantId: actor.tenantId,
+            occurredAt: currentTime,
+          });
+          this.store.receipts.set(command.idempotencyKey, {
+            tenantId: actor.tenantId,
+            idempotencyKey: command.idempotencyKey,
+            payloadDigest,
+            decisionId: replayed.decisionId,
+            recordedAt: currentTime,
+          });
+          request.status = 'APPROVED';
+          request.resolvedAt = currentTime;
+          request.resolvedByPrincipalId = actor.principalId;
+          request.resolvedDecisionId = replayed.decisionId;
+          this.store.decisions.set(replayed.decisionId, replayed);
+          return replayed;
+        }
+
+        // COMMITTED: consume the approval and mirror the outcome in memory.
+        request.status = 'APPROVED';
+        request.resolvedAt = currentTime;
+        request.resolvedByPrincipalId = actor.principalId;
+        request.resolvedDecisionId = decisionId;
+        this.mirrorAuthorizedCommit({
+          canonicalKey: request.canonicalPayableKey,
+          intentDigestSha256: request.intentDigestSha256,
+          amountUsd: unroundedUsd.toString(),
+          commitmentId,
+          budgetId: budget.budgetId,
+          decisionId,
+          tenantId: actor.tenantId,
+          occurredAt: currentTime,
+        });
+        budget.revision += 1;
+        this.store.decisions.set(decisionId, approvedRecord);
+        this.store.receipts.set(command.idempotencyKey, {
+          tenantId: actor.tenantId,
+          idempotencyKey: command.idempotencyKey,
+          payloadDigest,
+          decisionId,
+          recordedAt: currentTime,
+        });
+        this.store.ledgerEvents.push({
+          eventId: `evt-${randomUUID()}`,
+          tenantId: actor.tenantId,
+          eventType: 'APPROVAL_RESOLVED',
+          payload: { approvalRequestId: request.approvalRequestId, decisionId, action: 'APPROVE' },
+          occurredAt: currentTime,
+        });
+        return approvedRecord;
+      }
+
+      // In-memory authoritative path (demo default).
       request.status = 'APPROVED';
       request.resolvedAt = currentTime;
       request.resolvedByPrincipalId = actor.principalId;
       request.resolvedDecisionId = decisionId;
 
-      const unroundedUsd = decimal(request.unroundedUsd);
       budget.committedUsd = decimal(budget.committedUsd).plus(unroundedUsd).toString();
       budget.revision += 1;
 
@@ -441,6 +682,153 @@ export class FinancialAuthorizationService {
 
       return record;
     });
+  }
+
+  /** Syncs the in-memory budget mirror to the authoritative committed total. */
+  private syncBudgetMirror(budget: BudgetDirectoryEntry | undefined, committedUsd: string | null): void {
+    if (budget && committedUsd !== null) {
+      budget.committedUsd = committedUsd;
+    }
+  }
+
+  /** Mirrors an authoritative commit into the in-memory read paths. */
+  private mirrorAuthorizedCommit(input: {
+    canonicalKey: string;
+    intentDigestSha256: string;
+    amountUsd: string;
+    commitmentId: string;
+    budgetId: string;
+    decisionId: string;
+    tenantId: string;
+    occurredAt: string;
+  }): void {
+    this.store.obligations.set(input.canonicalKey, {
+      obligationId: `ob-${randomUUID()}`,
+      tenantId: input.tenantId,
+      canonicalKey: input.canonicalKey,
+      intentDigestSha256: input.intentDigestSha256,
+      status: 'COMMITTED',
+      committedUsd: input.amountUsd,
+      authorizedAt: input.occurredAt,
+    });
+    this.store.commitments.set(input.commitmentId, {
+      commitmentId: input.commitmentId,
+      tenantId: input.tenantId,
+      canonicalPayableKey: input.canonicalKey,
+      budgetId: input.budgetId,
+      unroundedUsd: input.amountUsd,
+      decisionId: input.decisionId,
+      committedAt: input.occurredAt,
+    });
+    this.store.ledgerEvents.push({
+      eventId: `evt-${randomUUID()}`,
+      tenantId: input.tenantId,
+      eventType: 'SIMULATED_AUTHORIZATION_COMMITTED',
+      payload: { decisionId: input.decisionId, canonicalKey: input.canonicalKey, unroundedUsd: input.amountUsd },
+      occurredAt: input.occurredAt,
+    });
+  }
+
+  /** Records the duplicate race loser and its idempotency receipt. */
+  private recordDuplicateLoser(
+    evalResult: FinancialEvaluation,
+    ids: {
+      decisionId: string;
+      tenantId: string;
+      payableId: string;
+      occurredAt: string;
+      idempotencyKey: string;
+      payloadDigest: string;
+      conflictingIntent?: boolean;
+    }
+  ): FinancialDecisionRecord {
+    const conflictingIntent = ids.conflictingIntent ?? false;
+    const loserEval: FinancialEvaluation = {
+      ...evalResult,
+      outcome: 'BLOCKED',
+      explanation: conflictingIntent
+        ? 'Intención financiera conflictiva detectada al intentar comprometer fondos.'
+        : 'Cobro duplicado detectado al intentar comprometer fondos.',
+      gateChecks: evalResult.gateChecks.map(c =>
+        c.gate === 'G2'
+          ? {
+              ...c,
+              status: 'FAIL',
+              code: conflictingIntent ? 'G2_CONFLICT' : 'G2_DUPLICATE',
+              explanation: conflictingIntent
+                ? 'Conflicto de concurrencia: la obligación existente tiene una intención financiera distinta.'
+                : 'Conflicto de concurrencia: la obligación ya fue autorizada por otra transacción.',
+            }
+          : c
+      ),
+    };
+    const decisionRecord: FinancialDecisionRecord = {
+      ...loserEval,
+      decisionId: ids.decisionId,
+      tenantId: ids.tenantId,
+      payableId: ids.payableId,
+      occurredAt: ids.occurredAt,
+      commitmentId: null,
+      approvalRequestId: null,
+    };
+    this.store.decisions.set(ids.decisionId, decisionRecord);
+    this.store.receipts.set(ids.idempotencyKey, {
+      tenantId: ids.tenantId,
+      idempotencyKey: ids.idempotencyKey,
+      payloadDigest: ids.payloadDigest,
+      decisionId: ids.decisionId,
+      recordedAt: ids.occurredAt,
+    });
+    return decisionRecord;
+  }
+
+  /** Records a BLOCKED decision when the authoritative backend reports the
+   *  budget was concurrently exhausted after the gates passed. */
+  private recordConcurrentExhaustion(
+    evalResult: FinancialEvaluation,
+    ids: {
+      decisionId: string;
+      tenantId: string;
+      payableId: string;
+      occurredAt: string;
+      idempotencyKey: string;
+      payloadDigest: string;
+      availableUsd: string;
+    }
+  ): FinancialDecisionRecord {
+    const blockedEval: FinancialEvaluation = {
+      ...evalResult,
+      outcome: 'BLOCKED',
+      explanation: 'Pago bloqueado: presupuesto agotado de forma concurrente en el almacén autoritativo.',
+      gateChecks: evalResult.gateChecks.map(c =>
+        c.gate === 'G5'
+          ? {
+              ...c,
+              status: 'FAIL',
+              code: 'BUDGET_EXHAUSTED',
+              explanation: `Presupuesto agotado concurrentemente (disponible: USD ${ids.availableUsd}).`,
+            }
+          : c
+      ),
+    };
+    const decisionRecord: FinancialDecisionRecord = {
+      ...blockedEval,
+      decisionId: ids.decisionId,
+      tenantId: ids.tenantId,
+      payableId: ids.payableId,
+      occurredAt: ids.occurredAt,
+      commitmentId: null,
+      approvalRequestId: null,
+    };
+    this.store.decisions.set(ids.decisionId, decisionRecord);
+    this.store.receipts.set(ids.idempotencyKey, {
+      tenantId: ids.tenantId,
+      idempotencyKey: ids.idempotencyKey,
+      payloadDigest: ids.payloadDigest,
+      decisionId: ids.decisionId,
+      recordedAt: ids.occurredAt,
+    });
+    return decisionRecord;
   }
 
   private buildContextSnapshot(

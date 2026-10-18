@@ -13,7 +13,7 @@ Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Bl
 | Component | Ownership | Status |
 | --- | --- | --- |
 | **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | Local runtime and LlamaIndex adapters implemented; live cloud/OCR validation pending |
-| **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Kernel, approvals, trusted L1 reader adapter and operations dashboard implemented with a synthetic in-memory ledger; SQL-backed persistence and L3 integration pending |
+| **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Kernel, approvals, trusted L1 reader adapter and operations dashboard implemented; optional PostgreSQL commit adapter persists authorized commits, while the default demo and pending-approval lifecycle remain in-memory; L3 integration pending |
 | **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Slice A operational schema, idempotency and fencing implemented; P0 runs on the in-process deterministic demo runtime of ADR-007 (Trigger.dev/Neon swap-in pending) |
 | **DEMO-001 · Synthetic AP Environment** | Test fixtures, reference data, seed/reset/replay and test-only oracle | Handoff prepared; integration pending |
 | **DEMO-002 · AgentMail intake** | Email ingestion adapter | Proposed, not required for core golden-set tests |
@@ -26,7 +26,7 @@ Eight synthetic payable scenarios cover two automatic simulated authorizations, 
 
 ```text
 apps/              # Finance operations dashboard (serves the L2 inspector UI)
-packages/          # L1 evidence intelligence, external intake, and the L2 decision kernel
+packages/          # L1 evidence intelligence, external intake, L2 kernel, and SQL commit adapter
 integrations/      # AgentMail, Daytona and other adapters (as needed)
 demo/              # Synthetic AP environment, replay, evaluation
 docs/              # Architecture decisions and specifications
@@ -43,7 +43,7 @@ The separate [external-document intake package](packages/external-document-intak
 
 ## Run L2
 
-`npm run test:l2` exercises the decision kernel, transactional semantics, human-approval lifecycle and a trusted L1 `reader.loadReady` integration against a real synthetic PDF. `npm run l2:demo` evaluates the eight canonical Blinka scenarios through the six gates and demonstrates one simulated FinanceAdmin approval; `npm run l2:web` serves the operations dashboard at `http://localhost:3000`. The L2 store is an in-process synthetic ledger for the hackathon, not the SQL-backed authoritative store required by ADR-003, and no real payments are ever made: `AUTHORIZED_SIMULATED` never means `PAID`.
+`npm run test:l2` exercises the decision kernel, transactional semantics, human-approval lifecycle and a trusted L1 `reader.loadReady` integration against a real synthetic PDF. `npm run l2:demo` evaluates the eight canonical Blinka scenarios through the six gates and demonstrates one simulated FinanceAdmin approval; `npm run l2:web` serves the operations dashboard at `http://localhost:3000`. The optional `@praeco/financial-store-sql` adapter commits authorized payables and approval-time authorizations through PostgreSQL transactions. Run its transaction and integration tests against a disposable PostgreSQL database with `DATABASE_URL=... npm run test --workspace @praeco/financial-store-sql`; CI supplies a fresh PostgreSQL service. Pending approvals and non-commit decisions remain in-memory, so this is not full ADR-003 persistence or production readiness. No real payments are ever made: `AUTHORIZED_SIMULATED` never means `PAID`.
 
 ## Contribution workflow
 

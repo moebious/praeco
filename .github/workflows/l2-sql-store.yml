@@ -37,6 +37,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - run: npm run build --workspace @praeco/evidence-intelligence
+      - run: npm run build --workspace @praeco/financial-decision-kernel
       - run: npm run build --workspace @praeco/financial-store-sql
       - run: npm run typecheck --workspace @praeco/financial-store-sql
       - run: npm run test --workspace @praeco/financial-store-sql
