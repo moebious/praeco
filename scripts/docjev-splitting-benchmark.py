@@ -82,9 +82,12 @@ def score_split(response, expected):
         return {"status": "invalid_coverage"}
     expected_boundaries = {ps[0] for _, ps in expected if ps[0] != 1}
     predicted_boundaries = {ps[0] for _, ps in actual if ps[0] != 1}
-    correct_pages = sum(a == b for (_, ea), (_, pa) in zip(
-        [(p, c) for c, ps in expected for p in ps],
-        [(p, c) for c, ps in actual for p in ps]) for a, b in [(ea, pa)])
+    expected_page_categories = {p: c for c, pages in expected for p in pages}
+    actual_page_categories = {p: c for c, pages in actual for p in pages}
+    correct_pages = sum(
+        expected_page_categories[p] == actual_page_categories[p]
+        for p in range(1, total + 1)
+    )
     warnings = response.get("warnings")
     warning_count = len(warnings) if isinstance(warnings, list) else 0
     exact = tuple(actual) == expected
@@ -106,7 +109,7 @@ def score_parse(response, count):
     pages = response.get("pages")
     if response.get("page_count") != count or not isinstance(pages, list) or len(pages) != count:
         return {"status": "invalid_parse"}
-    if any(not isinstance(p, dict) for p in pages) or [p["number"] for p in pages] != list(range(1, count+1)):
+    if any(not isinstance(p, dict) for p in pages) or [p.get("number") for p in pages] != list(range(1, count+1)):
         return {"status": "invalid_pages"}
     return {"status": "pass", "pageCount": count}
 
