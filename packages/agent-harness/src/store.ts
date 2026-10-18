@@ -76,6 +76,7 @@ export interface HarnessStore {
     commandReceipt: CommandReceipt;
     assignment: Assignment;
     caseData?: PayableCase;
+    sourceLinks?: readonly CaseSourceLink[];
     threadLink?: {
       provider: string;
       installationId: string;
@@ -322,6 +323,7 @@ export class InMemoryHarnessStore implements HarnessStore {
     commandReceipt: CommandReceipt;
     assignment: Assignment;
     caseData?: PayableCase;
+    sourceLinks?: readonly CaseSourceLink[];
     threadLink?: {
       provider: string;
       installationId: string;
@@ -377,6 +379,20 @@ export class InMemoryHarnessStore implements HarnessStore {
 
     if (params.caseData && params.caseData.caseId === params.assignment.caseId) {
       await this.saveCase(params.caseData);
+    }
+
+    // Documentary evidence links become visible with the accepted assignment.
+    if (params.sourceLinks?.length) {
+      const caseKey = this.caseKey(params.assignment.tenantId, params.assignment.caseId);
+      const current = this.cases.get(caseKey);
+      if (!current) {
+        throw new HarnessError('CASE_NOT_FOUND', 'Document intake requires a canonical case');
+      }
+      this.cases.set(caseKey, {
+        ...current,
+        version: current.version + 1,
+        sourceLinks: [...current.sourceLinks, ...params.sourceLinks],
+      });
     }
 
     await this.saveAssignment(params.assignment, 0);

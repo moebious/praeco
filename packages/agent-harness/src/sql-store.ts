@@ -578,6 +578,7 @@ export class SqlHarnessStore implements HarnessStore {
     commandReceipt: CommandReceipt;
     assignment: Assignment;
     caseData?: PayableCase;
+    sourceLinks?: readonly CaseSourceLink[];
     threadLink?: {
       provider: string;
       installationId: string;
@@ -669,6 +670,23 @@ export class SqlHarnessStore implements HarnessStore {
             params.caseData.version,
           ]
         );
+      }
+
+      // Evidence links and the queued assignment become visible in one commit.
+      if (params.sourceLinks?.length) {
+        const updatedCase = await client.query(
+          `UPDATE harness_cases
+           SET source_links = source_links || $3::jsonb, version = version + 1
+           WHERE tenant_id = $1 AND case_id = $2`,
+          [
+            params.assignment.tenantId,
+            params.assignment.caseId,
+            JSON.stringify(params.sourceLinks),
+          ]
+        );
+        if (!updatedCase.rowCount) {
+          throw new HarnessError('CASE_NOT_FOUND', 'Document intake requires a canonical case');
+        }
       }
 
       // 3. Insert assignment

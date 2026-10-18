@@ -98,7 +98,13 @@ export class InMemoryChannelInbox implements ChannelInboxPort {
     if (options?.signal?.aborted) {
       throw new HarnessError('EXECUTION_ABORTED', 'getMessage was aborted by cancellation signal');
     }
-    return this.messages.get(this.makeKey(tenantId, messageId));
+    const msg = this.messages.get(this.makeKey(tenantId, messageId));
+    if (!msg) return undefined;
+    // Detached copy: callers can never mutate stored attachment bytes.
+    return {
+      ...msg,
+      attachments: msg.attachments.map((att) => ({ ...att, content: Uint8Array.from(att.content) })),
+    };
   }
 
   async markProcessed(
@@ -186,6 +192,27 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
     }
   }
 
+  // Fetch and defensively verify a tenant-scoped message. Ports are trusted
+  // infrastructure, but returned rows are still checked against the context
+  // tenant so a faulty port cannot leak another tenant's message.
+  async function requireScopedMessage(
+    tenantId: TenantId,
+    messageId: string,
+    signal?: AbortSignal
+  ): Promise<InboundChannelMessage> {
+    const msg = await options.inbox.getMessage(tenantId, messageId, signal ? { signal } : undefined);
+    if (!msg) {
+      throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${messageId} not found in inbox`);
+    }
+    if (msg.tenantId !== tenantId) {
+      throw new HarnessError(
+        'CROSS_TENANT_MESSAGE',
+        `Channel message ${messageId} does not belong to tenant ${tenantId}`
+      );
+    }
+    return msg;
+  }
+
   // Tool 1: Fetch channel inbox
   const fetchInboxTool: SpecialistToolDefinition<
     { connectionId?: string; limit?: number; status?: 'PENDING' | 'PROCESSED' | 'ALL' },
@@ -233,11 +260,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
     async execute(params, context) {
       assertNotCancelled(context.signal, 'eve_inspect_inbound_message:start');
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      const msg = await requireScopedMessage(tenantId, params.messageId, context.signal);
       assertNotCancelled(context.signal, 'eve_inspect_inbound_message:after_get_message');
-      if (!msg) {
-        throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
-      }
 
       // Resolve principal binding for sender
       let binding = await options.store.getPrincipalBinding(
@@ -301,11 +325,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
     async execute(params, context) {
       assertNotCancelled(context.signal, 'eve_extract_and_validate_attachment:start');
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      const msg = await requireScopedMessage(tenantId, params.messageId, context.signal);
       assertNotCancelled(context.signal, 'eve_extract_and_validate_attachment:after_get_message');
-      if (!msg) {
-        throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
-      }
 
       const att = msg.attachments.find((a) => a.filename === params.filename);
       if (!att) {
@@ -361,11 +382,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       }
 
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      const msg = await requireScopedMessage(tenantId, params.messageId, context.signal);
       assertNotCancelled(context.signal, 'eve_ingest_document_to_l1:after_get_message');
-      if (!msg) {
-        throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
-      }
 
       const att = msg.attachments.find((a) => a.filename === params.filename);
       if (!att) {
@@ -420,11 +438,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
     async execute(params, context) {
       assertNotCancelled(context.signal, 'eve_correlate_payable_case:start');
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      const msg = await requireScopedMessage(tenantId, params.messageId, context.signal);
       assertNotCancelled(context.signal, 'eve_correlate_payable_case:after_get_message');
-      if (!msg) {
-        throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
-      }
 
       // Check principal binding
       let binding = await options.store.getPrincipalBinding(
@@ -451,19 +466,15 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
         );
       }
 
-      const principal: TrustedPrincipal = binding
-        ? {
-            tenantId: binding.tenantId,
-            principalId: binding.principalId,
-            roles: binding.roles,
-            bindingRevision: binding.bindingRevision,
-          }
-        : {
-            tenantId,
-            principalId: `agentmail-sender-${msg.from.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
-            roles: ['InboundSender'],
-            bindingRevision: 'rev-0',
-          };
+      // An email From address never grants authority (DEMO-002). The binding is
+      // consulted only to enforce revocation; Eve always correlates as the
+      // unprivileged InboundSender principal.
+      const principal: TrustedPrincipal = {
+        tenantId,
+        principalId: `agentmail-sender-${msg.from.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+        roles: ['InboundSender'],
+        bindingRevision: binding ? `revocation-checked:${binding.bindingRevision}` : 'unverified-address',
+      };
 
       const attachmentHashes = msg.attachments.map((a) =>
         createHash('sha256').update(a.content).digest('hex')

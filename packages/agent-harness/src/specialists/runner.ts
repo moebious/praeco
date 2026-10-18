@@ -97,6 +97,12 @@ export class BoundedSpecialistRunner {
       let output: unknown;
       try {
         output = await Promise.race([stepPromise, timeoutPromise]);
+      } catch (err) {
+        // The losing promise may settle after the deadline; swallow a late
+        // rejection so it cannot surface as an unhandled rejection. Its side
+        // effects may still complete: cancellation is cooperative.
+        stepPromise.catch(() => {});
+        throw err;
       } finally {
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
@@ -108,8 +114,8 @@ export class BoundedSpecialistRunner {
         stepNumber,
         role,
         toolName: step.toolName,
-        inputSummary: JSON.stringify(step.params),
-        outputSummary: typeof output === 'object' ? JSON.stringify(output) : String(output),
+        inputSummary: '(redacted)',
+        outputSummary: '(redacted)',
         durationMs,
         timestamp: new Date().toISOString(),
       };
