@@ -14,7 +14,7 @@ Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Bl
 | --- | --- | --- |
 | **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | Local runtime and LlamaIndex adapters implemented; live cloud/OCR validation pending |
 | **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Kernel, approvals, trusted L1 reader adapter and operations dashboard implemented with a synthetic in-memory ledger; SQL-backed persistence and L3 integration pending |
-| **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Design in progress |
+| **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Architecture specified in ADR-004–006; implementation pending |
 | **DEMO-001 · Synthetic AP Environment** | Test fixtures, reference data, seed/reset/replay and test-only oracle | Handoff prepared; integration pending |
 | **DEMO-002 · AgentMail intake** | Email ingestion adapter | Proposed, not required for core golden-set tests |
 

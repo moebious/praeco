@@ -1,12 +1,12 @@
 # ADR-006 — Multichannel Messaging, Identity Binding and Safe Approvals
 
-**Status:** Proposed for review, not implemented
+**Status:** Accepted; implementation pending
 **Date:** 2026-10-17
 **Depends on:** ADR-001–005
 
 ## Decision
 
-Praeco exposes one tenant-bound financial teammate over multiple channels; **a channel is a transport, not an authority, account, Assignment or financial ledger**. Vercel Chat SDK is the preferred integration layer for supported channels, with direct provider adapters allowed if a requested channel is unsupported or blocked by provider access. The MVP prioritizes Web + Email + Telegram. Slack and WhatsApp are planned integrations, not prerequisites to pass financial acceptance.
+Praeco exposes one tenant-bound financial teammate over multiple channels; **a channel is a transport, not an authority, account, Assignment or financial ledger**. Vercel Chat SDK is the preferred integration layer for supported channels, with direct provider adapters allowed if a requested channel is unsupported or blocked by provider access. P0 requires Web + Email; Telegram is optional after identity linking. Slack and WhatsApp are planned integrations, not prerequisites to pass financial acceptance. Channel callbacks authenticate, normalize and enqueue work; they never host a competing financial agent loop.
 
 - Web: authenticated first-party application and inspector.
 - Email: verified inbound webhook/transport integration (Chat SDK adapter where supported), synthetic attachment ingestion, signed/replay-protected provider events. Sender email is **not** verified vendor or FinanceAdmin authority.
@@ -17,7 +17,7 @@ Praeco exposes one tenant-bound financial teammate over multiple channels; **a c
 
 ## Identity and anti-confusion
 
-Persist `ChannelConnection(tenantId, channel, installationId, status)`, `ExternalPrincipalBinding(tenantId, channel, providerUserId, authenticatedPrincipalId, assurance, linkedAt, revokedAt)`, and `ChannelMessageReceipt(tenantId, channel, eventId, threadId, messageId, receivedAt)` under tenant-aware unique keys. Never link two accounts merely because they share display name, phone, email or message text.
+Persist `ChannelConnection(tenantId, provider, installationId, status)`, `ExternalPrincipalBinding(tenantId, provider, installationId, providerUserId, authenticatedPrincipalId, bindingRevision, assurance, linkedAt, revokedAt)`, and `ChannelMessageReceipt(tenantId, provider, installationId, eventId, payloadDigest, threadId, messageId, receivedAt)` under matching composite keys. Conversation links, SDK state namespaces and recipient lookups use the same tenant/provider/installation scope. Equal event/user/thread IDs in two installations never select the same binding or suppress a legitimate event. Resolve installation ownership from verified provider context before selecting tenant; reject mismatched payload reuse. Never link accounts by display name, phone, email or message text.
 
 A trusted, authenticated web session may issue a **single-use, short-lived linking challenge** to establish a channel identity. The challenge binds tenant, user, channel installation, external account and expiry; validate it server-side, prevent cross-tenant reuse, audit unlink/revocation. Unlinked senders may receive limited onboarding or submit untrusted documents if permitted, but **cannot** invoke protected financial commands or see private decision details.
 
@@ -28,12 +28,12 @@ Verify provider webhook signatures using the raw original request body (when pro
 - Incoming messages can create or query an Assignment only within the authenticated/linked principal's permitted tenant/capabilities. An LLM may draft proposals; trusted backend routes and validates tool calls.
 - The same `PayableCase` can have many `ConversationLink` records; a message's thread ID is not the case's authority or duplicate key.
 - A message saying "approve", an emoji reaction, an email reply, or a Chat SDK button **must not** directly consume L2 approvals. They can request an authenticated approval handoff; a FinanceAdmin web action resolves a bound L2 approval request and L2 must re-evaluate all financial gates.
-- Notifications show redacted amount, vendor identifier, decision summary and signed short-lived **navigation** link; navigation links are not authorization capabilities. Private evidence, account details and policy must stay behind tenant authentication.
+- Before every notification send, recheck active installation, current recipient binding and read permission; enqueue-time permission is insufficient after revocation. Private linked destinations may receive a redacted summary and signed short-lived **navigation** link; links are not authorization capabilities and private evidence stays behind tenant authentication. Unverified/shared destinations receive only generic acknowledgment and an authenticated navigation path, not invoice details.
 - P0 may supply an explicitly simulated Blinka payment preview for `AUTHORIZED_SIMULATED`; never send "payment completed" from a chat response.
 
 ## Delivery semantics
 
-Provider events may be duplicated, reordered or delayed. Channel receivers record deduplicated inbound events and ack promptly; a transactional outbox coordinates domain commands and outbound notifications. Rendering/conversation status is best effort and never rolls back committed L2 financial decisions. Outbound notifications are idempotent by domain event/recipient/channel, with safe retry and redaction. Provider message IDs are correlation refs, not payable business duplicate keys.
+Provider events may be duplicated, reordered or delayed. Channel receivers durably record tenant/provider/installation/event and normalized payload digest before acknowledging accepted work; transient persistence failure must be retryable. A transactional outbox delivers domain commands and notifications without becoming another workflow engine. Rendering is best effort and never rolls back L2 decisions. Outbound domain deduplication uses tenant/event/installation/recipient/channel and aggregate version, with permission checks on every retry. Provider send idempotency must be demonstrated per adapter: a timeout after successful send can produce duplicate redacted notifications when the provider cannot deduplicate. Record delivery uncertainty and never claim exactly-once messaging or re-execute finance to repair a notification. Provider message IDs are correlation refs, not payable duplicate keys.
 
 ## Abuse cases and acceptance
 
@@ -45,6 +45,8 @@ Provider events may be duplicated, reordered or delayed. Channel receivers recor
 6. A finance-approval message/card without authenticated L2 FinanceAdmin action never commits budget.
 7. Out-of-order channel completion message cannot reopen terminal Assignment.
 8. Outbound failure or missing WhatsApp credentials does not corrupt Assignment, L1 or L2 state.
+9. Same-tenant installations with colliding event/user/thread IDs remain distinct; changed payload reuse is rejected.
+10. Revocation between enqueue/send blocks private details; delayed/duplicate notifications cannot reopen resolved financial work.
 
 ## Non-goals
 

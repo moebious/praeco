@@ -1,6 +1,6 @@
 # ADR-004 — Domain-Specific Agent Harness, Identity and Authority
 
-**Status:** Proposed — review in L3 Draft PR, not yet accepted or implemented
+**Status:** Accepted; implementation pending
 **Date:** 2026-10-17
 **Scope:** Praeco L3 / 30X Blinka synthetic Accounts Payable MVP
 **Depends on:** ADR-001, ADR-002, ADR-003
@@ -27,7 +27,7 @@ L1 owns verifiable documentary evidence. L2 is the only financial policy and sim
 - **Trigger.dev** is the sole durable owner of each financial assignment workflow in P0. It may schedule L1 and L2 calls, retry safe tasks, suspend waits and emit events.
 - **Vercel Chat SDK** supplies channel adapters, webhook handling and provider conversation state. It does **not** become an Assignment store or authorization service.
 - **Praeco Postgres** (planned Neon + Drizzle) stores canonical operational identities, assignments, case associations, binding records, command deduplication and event outbox. Chat SDK may use a separate namespaced Postgres state adapter; that state is transport infrastructure, not canonical finance state.
-- **Eve and Pi Durable** are explicitly deferred candidates. They are not required to deliver the MVP, and do not run competing workflows. Adopting Eve later requires a separate ADR proving unique ownership and migration semantics.
+- **Eve and Pi Durable** are outside this baseline, including the scheduled implementation roadmap. Reconsideration requires a new ADR proving unique ownership and migration semantics; neither is a fallback executor.
 - **Optional Daytona/VM and Link Wallet** are future, individually permissioned tool adapters. They are not needed for P0.
 
 ## Trust boundaries
@@ -43,7 +43,7 @@ L1 owns verifiable documentary evidence. L2 is the only financial policy and sim
 
 ## Consequences
 
-The team UI may present a conversation among Vera/Kael/Nova without creating separate durable agents. A reply can end while its Assignment remains running or awaiting review. The same case can be followed on multiple channels only after explicit user linking. Retried messages cannot create extra simulated budget commitments. Agent memory and the chat provider are never the business system of record.
+The team UI may present a conversation among Vera/Kael/Nova without creating separate durable agents. Specialist role and worker version are execution attributes, not additional tenant service principals. A reply can end while its Assignment remains running or awaiting review. The same case can be followed on multiple channels only after explicit user linking within the correct installation. Retried messages cannot create extra simulated budget commitments. Agent memory and the chat provider are never the business system of record. See the [glossary](../../GLOSSARY.md) for the distinctions between case, Assignment, principal and approval lifecycle.
 
 ## Rejected alternatives
 

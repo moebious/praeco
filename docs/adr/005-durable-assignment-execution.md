@@ -1,6 +1,6 @@
 # ADR-005 — Durable Assignment Execution, Recovery and Runtime Ownership
 
-**Status:** Proposed for review; not implemented
+**Status:** Accepted; implementation pending
 **Date:** 2026-10-17
 **Depends on:** ADR-001–004
 
@@ -8,7 +8,7 @@
 
 **Trigger.dev owns every P0 financial Assignment workflow.** Vercel AI SDK is an inference/tool-loop library invoked inside bounded steps, **not** a second durable orchestrator. Chat SDK owns channel transport/conversation state only, not financial work. Praeco's authoritative operational record lives in tenant-scoped SQL; L2 alone owns financial commitments and approvals.
 
-Eve and Pi Durable are **deferred alternative architectures**, not runtime dependencies, fallback workers or silent double executors. No continuous process or VM is required for an agent to remain persistent.
+Eve and Pi Durable are **outside this baseline**, not runtime dependencies, roadmap deliverables, fallback workers or silent double executors. No continuous process or VM is required for an agent to remain persistent.
 
 ## Canonical semantics
 
@@ -20,17 +20,17 @@ Eve and Pi Durable are **deferred alternative architectures**, not runtime depen
 - `ApprovalWait`: durable L3 observation of a *specific* L2 approval request; never a budget hold and never itself an approval.
 - `CommandReceipt`: stable idempotency identity and result ref scoped by tenant, command type, actor, Assignment and payload digest.
 
-Assignment lifecycle (P0): `QUEUED -> RUNNING -> WAITING_FOR_REVIEW -> RUNNING -> COMPLETED`, with transitions to `FAILED_RECOVERABLE`, `FAILED_TERMINAL` and `CANCELLED` as applicable. **These are workflow states, not L2 financial verdicts.** A financial `BLOCKED` decision completes the assignment investigation as `COMPLETED` referencing the immutable blocked decision record; it must not be confused with `FAILED_TERMINAL` infrastructure failure.
+Assignment lifecycle (P0): `QUEUED -> RUNNING -> WAITING_FOR_REVIEW -> RUNNING -> COMPLETED`, with transitions to `FAILED_RECOVERABLE`, `FAILED_TERMINAL` and `CANCELLED` as applicable. `BLOCKED` is exclusively an L2 financial verdict; the Assignment completes with that stored decision reference. Terminal Assignment states cannot be reopened by a delayed event. Recovery from `FAILED_RECOVERABLE` uses an authenticated resume, the same financial intent and a newly fenced run.
 
 ## Exclusive writer and reliable dispatch
 
 1. A trusted inbound API authenticates tenant/actor/channel principal mapping, checks permissions and validates a normalized command.
-2. Inside one SQL transaction, deduplicate `(tenantId, provider, providerEventId)` for received events; resolve/create the case; insert or load an `Assignment` and `CommandReceipt`; add an outbox event to start or resume its workflow.
-3. Dispatch to Trigger.dev asynchronously from the outbox, using stable idempotency keys and replayable parameters. Crash between commit and dispatch is recovered by the Reconciler draining the outbox. Trigger may redeliver: the domain-level command receipt prevents duplicate assignment or financial effects.
-4. The workflow state machine advances via compare-and-swap version transitions/unique write constraints. Task workers report outcomes and versioned event records. A retry must never overwrite a terminal state from a newer run. Queue concurrency is 1 per assignment.
-5. L3 calls trusted L1 through registered sources and identifiers; collects stored envelope references. An empty/supplemental L1 result is a distinct admissible *operational* disposition, not READY evidence. L3 prefilters non-ready envelopes and never submits them to L2.
-6. If a payable is eligible for L2, use stable per-intent L2 idempotency (`sha256(tenantId + ":" + canonicalPayableKey + ":" + intentDigestSha256)`). L2 re-resolves trusted evidence and current financial context for `decideAndCommit`.
-7. On `PENDING_HUMAN_APPROVAL`, persist the L2 approval request ID and the Trigger wait token (`triggerWaitToken`) on the `Assignment` record and enter `WAITING_FOR_REVIEW`. Deliver notifications through outbox. The authenticated approver action is handled by L2; once L2 commits its decision, the web approval API completes the Trigger wait token synchronously. Trigger wait tokens are wake-up signals, not proof of finance authorization.
+2. Inside one SQL transaction, deduplicate `(tenantId, provider, installationId, providerEventId)` for received events and bind a backend-computed normalized payload digest. Exact retry returns the prior receipt; conflicting payload under that key fails closed. Resolve/create the case, insert/load its Assignment and command receipt, and add the start/resume outbox event atomically. Never derive tenant or actor from unchecked message fields.
+3. Dispatch to Trigger.dev asynchronously from the outbox, using stable domain command keys and replayable parameters. Crash between commit and dispatch is recovered by draining the outbox. Trigger task/run-scoped deduplication, retention expiry or failed-run key clearing never replaces SQL command receipts. A stateless outbox drainer only delivers commands; it does not advance a competing workflow.
+4. Claim one active run/monotonic ownership epoch per Assignment with a SQL version guard. Bind trusted tenant/actor/worker context to every protected operation; compare active run, epoch and expected version before transitions, checkpoints or new financial dispatch. CAS over state alone does not authorize the caller or fence a stale worker. Already-sent L2 calls may finish; reconcile them through their existing intent/key instead of pretending cancellation or a new owner erased the effect.
+5. L3 uses L1 `processWithReceipt` or the external intake adapter and persists source/hash, pipeline run, explicit disposition and envelope references. Resolve those references through trusted readers on recovery. `SUPPLEMENTAL_CONTEXT` retains a completed run without a fabricated invoice; empty invoice/uncertain results fail closed. Context-only work cannot create a financial intent.
+6. Before dispatch to L2, persist a backend-created intent binding case/source revision, proposal digest, actor, worker, requested budget and stable L2 idempotency key. Claim dispatch rights and the immutable intent in one fenced SQL transaction; stale workers cannot create another intent, while already-issued duplicate requests must retain the same payload/key. That key never depends on Trigger run/attempt ID and never changes after timeout. Query L2's authoritative command receipt when completion is unknown; only confirmed NOT_FOUND permits resubmitting the identical command/key. L2 re-resolves trusted evidence and current financial context for `decideAndCommit`.
+7. On `PENDING_HUMAN_APPROVAL`, persist the original decision and approval request ID, then enter `WAITING_FOR_REVIEW`. L2 alone handles authenticated consent. Read the L2 approval lifecycle before/after registering a bounded Trigger wait and on every wake/timeout/reconciliation. RESOLVED must provide its new immutable resolution decision ID; never poll the original PENDING decision expecting it to mutate. Check resolution/request/tenant/intent bindings and record the new decision reference. Rejection, expiry or stale permission without a new L2 decision is an operational resolution, not an invented financial verdict. Wait tokens and callback payloads are notification only; keep completion credentials out of channel/model output.
 8. On financial decision, persist the immutable L2 decision reference and emit a response event. A crash during delivery replays the notification without rerunning `decideAndCommit`.
 
 ## The Reconciler
@@ -42,6 +42,8 @@ A named **Reconciler** running as a Trigger.dev scheduled task (15–30s cadence
 
 Do not use multiple independent Trigger workflows or AI agent sessions as competing owners of a single Assignment; child tasks need explicit delegation and a clear parent ownership model.
 
+SQL stores domain state and guards; Trigger remains the only durable workflow executor. Reconciliation may enqueue a wake/resume for the existing Assignment or claim a fenced replacement after termination. It cannot run a parallel financial state machine. Cancellation fences future work but remains requested while an L2 command or approval remains unresolved; record/reconcile any existing commitment before terminal status. A known committed outcome completes with its actual financial reference and cannot be hidden as CANCELLED. L3 cancellation never reverses a commitment or resolves an L2 approval.
+
 ## Failure and recovery
 
 | Failure | Recovery rule |
@@ -50,7 +52,9 @@ Do not use multiple independent Trigger workflows or AI agent sessions as compet
 | Trigger retry after timeout | Re-read SQL state and command receipt; reuse idempotency key |
 | L1 completed, receipt not delivered | Recover stored artifact/run references instead of inventing a READY invoice |
 | L2 result uncertain after timeout | Query durable L2 command/decision by idempotency; NEVER commit again with a new key |
-| Pending approval expired/rejected | Observe immutable L2 state and close/route case; do not invent approval |
+| Approval resolved but notification lost | Query approval lifecycle by request ID, load its resolution decision ID and preserve the original PENDING record |
+| Wait completes/times out before L2 resolution | Re-read authoritative lifecycle; continue bounded reconciliation without inferring APPROVE/EXPIRE from the wait |
+| Pending approval expired/rejected | Observe L2 lifecycle and any resolution decision; close/route operational work without inventing a financial outcome |
 | Process/VM lost | Reconstruct from persisted Assignment, checkpoint and source refs |
 | Channel send failed | Retry outbox notification with provider dedup semantics; no financial re-execution |
 | Revoked capability | Enforce current server-side grant at every protected action, even after checkpoint |
@@ -70,6 +74,10 @@ Replay uses captured IDs, versions and execution events to reconstruct/explain a
 - Parallel workers attempting stale transition cannot both become exclusive owner.
 - L2 timeout/retry yields same decision and at most one ledger commitment.
 - Pending human approval survives restart; forged chat confirmation never resolves it.
+- Lost approval event and resolve-before-wait race recover the new decision by approval request ID.
+- Trigger deduplication expiry/failed-run recreation and stale ownership never create a new financial intent/key.
+- Cancellation with an unknown L2 result reconciles before terminal status and never hides or reverses a commitment.
+- Context-only L1 intake retains source/hash/run/disposition across restart and never authorizes.
 - Expired/revoked authorization cannot be resumed from memory.
 - Late webhook after completed Assignment cannot resurrect it.
 - Cross-tenant source or case references fail closed.
@@ -81,4 +89,4 @@ Replay uses captured IDs, versions and execution events to reconstruct/explain a
 
 No general autonomous task scheduling, recursive arbitrary agent delegation, automatic policy tuning, continuous always-on compute, real payments, dual Eve/Trigger orchestration or Pi Durable runtime in P0.
 
-**Implementation proceeds only after the contracts and tests are reviewed.**
+**Implement from this reviewed contract and acceptance plan. Executable L3 tests belong in the implementation slices; no L3 runtime is claimed here.**
