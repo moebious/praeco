@@ -33,6 +33,13 @@ Assignment lifecycle (P0): `QUEUED -> RUNNING -> WAITING_FOR_REVIEW -> RUNNING -
 7. On `PENDING_HUMAN_APPROVAL`, persist the original decision and approval request ID, then enter `WAITING_FOR_REVIEW`. L2 alone handles authenticated consent. Read the L2 approval lifecycle before/after registering a bounded Trigger wait and on every wake/timeout/reconciliation. RESOLVED must provide its new immutable resolution decision ID; never poll the original PENDING decision expecting it to mutate. Check resolution/request/tenant/intent bindings and record the new decision reference. Rejection, expiry or stale permission without a new L2 decision is an operational resolution, not an invented financial verdict. Wait tokens and callback payloads are notification only; keep completion credentials out of channel/model output.
 8. On financial decision, persist the immutable L2 decision reference and emit a response event. A crash during delivery replays the notification without rerunning `decideAndCommit`.
 
+## The Reconciler
+
+A named **Reconciler** running as a Trigger.dev scheduled task (15–30s cadence, tenant-batched) owns three explicit recovery duties:
+1. **Outbox draining:** Drain undispatched outbox rows (L3 outbox, and calls trusted L2 outbox export/drain port if configured).
+2. **Approval observation:** Read L2 approval lifecycle state (derived expiry `createdAt + 24h` evaluated on read); for expired or resolved approvals, transition L3 assignments to `COMPLETED` and complete L3 waits. The Reconciler never writes or mutates L2 state directly.
+3. **Wait completion fallback:** Completes suspended Trigger waitpoints if the synchronous completion call by the web API failed or timed out.
+
 Do not use multiple independent Trigger workflows or AI agent sessions as competing owners of a single Assignment; child tasks need explicit delegation and a clear parent ownership model.
 
 SQL stores domain state and guards; Trigger remains the only durable workflow executor. Reconciliation may enqueue a wake/resume for the existing Assignment or claim a fenced replacement after termination. It cannot run a parallel financial state machine. Cancellation fences future work but remains requested while an L2 command or approval remains unresolved; record/reconcile any existing commitment before terminal status. A known committed outcome completes with its actual financial reference and cannot be hidden as CANCELLED. L3 cancellation never reverses a commitment or resolves an L2 approval.

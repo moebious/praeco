@@ -121,6 +121,7 @@ interface Assignment {
   initialL2DecisionId?: L2DecisionId;
   latestL2DecisionId?: L2DecisionId;
   l2ApprovalRequestId?: string;
+  triggerWaitToken?: string;
 }
 interface AgentRun {
   tenantId: TenantId;
@@ -183,11 +184,22 @@ interface AssignmentPort {
   advance(input: { assignmentId: AssignmentId; expectedVersion: number; next: AssignmentState; outputRefs: readonly string[] }, context: TrustedExecutionContext): Promise<Assignment>;
   get(assignmentId: AssignmentId, principal: TrustedPrincipal): Promise<Assignment>;
 }
+interface IngestSourceResult {
+  pipelineRunId: string;
+  sourceDisposition: "INVOICE_OR_UNCERTAIN" | "SUPPLEMENTAL_CONTEXT";
+  envelopes: ReadonlyArray<{
+    envelopeId: L1EnvelopeId;
+    pipelineRunId: string;
+    processingStatus: "READY_FOR_POLICY_EVALUATION" | "REVIEW_REQUIRED" | "REJECTED" | "PROCESSING_FAILED";
+  }>;
+}
 interface EvidencePort {
   ingestSource(sourceReference: string, context: TrustedExecutionContext): Promise<EvidenceRunReference>;
   loadRun(reference: EvidenceRunReference, principal: TrustedPrincipal): Promise<EvidenceRunReference>;
   loadReady(envelopeId: L1EnvelopeId, principal: TrustedPrincipal): Promise<ReadyEvidence>;
 }
+// Imported from @praeco/financial-decision-kernel:
+// FinancialDecisionRecord, FinancialEvaluation, PayableProposal
 interface FinancialDecisionPort {
   preview(intent: FinancialIntentReference, context: TrustedExecutionContext): Promise<{ binding: false; resultRef: string }>;
   decideAndCommit(intent: FinancialIntentReference, context: TrustedExecutionContext): Promise<FinancialDecisionReference>;
@@ -229,6 +241,13 @@ For P0 use Postgres transactions with tenant-aware foreign keys and row/version 
 5. `resumeAssignment`: query the L2 approval lifecycle by approval request ID. On RESOLVED, load its `resolutionDecisionId`, bind it to this tenant/request/intent and persist the new immutable decision reference. PENDING continues the bounded wait; rejection/expiry/staleness closes or routes operational work without inventing a financial verdict. If L2 emitted a resolution decision, use that actual outcome, which may be BLOCKED. Reread current permissions before protected actions. Recovery records already-committed outcomes; revocation never reverses them. A reconciliation sweep only enqueues a wake/resume for this Assignment; it is not another financial workflow.
 6. `replayAssignment`: read historical events/source/decision refs without side effects. A new financial decision is a separate explicit command. Cancellation fences future work; if an L2 command or approval remains unresolved, retain a cancellation request and reconcile that key before terminal state. L3 cancellation never cancels/compensates a committed financial decision or resolves an L2 approval. A known committed outcome completes with its real decision reference; it cannot be concealed as CANCELLED.
 7. `notifyChannel`: revalidate installation, recipient binding and current read permission at send time; redact and deduplicate by tenant+domain event+installation+recipient+channel. Stale aggregate versions cannot render a new pending approval after resolution. Delivery errors/unknown send acknowledgments never re-execute L2; providers without send idempotency may produce duplicate redacted notifications, not exactly-once delivery.
+
+## 5.1 The Reconciler (Durable scheduled recovery)
+
+A named **Reconciler** task runs as a Trigger.dev scheduled task (15–30s cadence, tenant-batched) owning three explicit recovery duties:
+1. **Outbox draining:** Drain undispatched outbox rows for L3 events and call trusted L2 outbox drain port if configured.
+2. **Approval observation:** Read L2 approval lifecycle state (derived expiry `createdAt + 24h` evaluated on read); for expired or resolved approvals, transition L3 assignments to `COMPLETED` and complete L3 waits. The Reconciler never writes or mutates L2 state directly.
+3. **Wait completion fallback:** Completes suspended Trigger waitpoints if the synchronous completion call by the web API failed or timed out.
 
 ## 6. Specialist boundaries
 
