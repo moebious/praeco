@@ -1,0 +1,297 @@
+import type {
+  AgentPrincipal,
+  AgentRun,
+  Assignment,
+  AssignmentId,
+  Checkpoint,
+  CommandReceipt,
+  ExecutionEvent,
+  ExternalPrincipalBinding,
+  InboundEventReceipt,
+  OutboxEvent,
+  PayableCase,
+  PayableCaseId,
+  TenantId,
+} from './types.js';
+import { HarnessError } from './state-machine.js';
+
+export interface HarnessStore {
+  // Principal bindings
+  getPrincipalBinding(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    providerUserId: string
+  ): Promise<ExternalPrincipalBinding | null>;
+
+  registerPrincipalBinding(binding: ExternalPrincipalBinding): Promise<void>;
+
+  // Agent principals
+  getAgentPrincipal(tenantId: TenantId, principalId: string): Promise<AgentPrincipal | null>;
+  registerAgentPrincipal(principal: AgentPrincipal): Promise<void>;
+
+  // Inbound receipt & duplicate check
+  getInboundReceipt(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    providerEventId: string
+  ): Promise<InboundEventReceipt | null>;
+
+  recordInboundReceipt(receipt: InboundEventReceipt): Promise<void>;
+
+  // Cases & Thread correlations
+  getCase(tenantId: TenantId, caseId: PayableCaseId): Promise<PayableCase | null>;
+  saveCase(c: PayableCase): Promise<void>;
+  findCaseByThread(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    threadId: string
+  ): Promise<PayableCaseId | null>;
+  linkThreadToCase(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    threadId: string,
+    caseId: PayableCaseId
+  ): Promise<void>;
+
+  // Assignments
+  getAssignment(tenantId: TenantId, assignmentId: AssignmentId): Promise<Assignment | null>;
+  saveAssignment(assignment: Assignment): Promise<void>;
+
+  // Runs & Checkpoints
+  saveRun(run: AgentRun): Promise<void>;
+  getRun(tenantId: TenantId, assignmentId: AssignmentId, runId: string): Promise<AgentRun | null>;
+  saveCheckpoint(checkpoint: Checkpoint): Promise<void>;
+  getCheckpoints(tenantId: TenantId, assignmentId: AssignmentId): Promise<readonly Checkpoint[]>;
+
+  // Command receipts
+  getCommandReceipt(
+    tenantId: TenantId,
+    scope: string,
+    commandKey: string
+  ): Promise<CommandReceipt | null>;
+  saveCommandReceipt(receipt: CommandReceipt): Promise<void>;
+
+  // Events & Outbox
+  recordExecutionEvent(event: ExecutionEvent): Promise<void>;
+  getExecutionEvents(tenantId: TenantId, aggregateId: string): Promise<readonly ExecutionEvent[]>;
+  enqueueOutbox(event: OutboxEvent): Promise<void>;
+  drainOutbox(tenantId: TenantId, limit?: number): Promise<readonly OutboxEvent[]>;
+}
+
+export class InMemoryHarnessStore implements HarnessStore {
+  public readonly principalBindings = new Map<string, ExternalPrincipalBinding>();
+  public readonly agentPrincipals = new Map<string, AgentPrincipal>();
+  public readonly inboundReceipts = new Map<string, InboundEventReceipt>();
+  public readonly cases = new Map<string, PayableCase>();
+  public readonly threadCaseLinks = new Map<string, PayableCaseId>();
+  public readonly assignments = new Map<string, Assignment>();
+  public readonly runs = new Map<string, AgentRun>();
+  public readonly checkpoints = new Map<string, Checkpoint>();
+  public readonly commandReceipts = new Map<string, CommandReceipt>();
+  public readonly executionEvents: ExecutionEvent[] = [];
+  public readonly outboxEvents: OutboxEvent[] = [];
+
+  private inboundKey(tenant: string, prov: string, inst: string, evt: string): string {
+    return `${tenant}:${prov}:${inst}:${evt}`;
+  }
+
+  private threadKey(tenant: string, prov: string, inst: string, thread: string): string {
+    return `${tenant}:${prov}:${inst}:${thread}`;
+  }
+
+  private bindingKey(tenant: string, prov: string, inst: string, user: string): string {
+    return `${tenant}:${prov}:${inst}:${user}`;
+  }
+
+  private assignmentKey(tenant: string, id: string): string {
+    return `${tenant}:${id}`;
+  }
+
+  private caseKey(tenant: string, id: string): string {
+    return `${tenant}:${id}`;
+  }
+
+  private commandKey(tenant: string, scope: string, key: string): string {
+    return `${tenant}:${scope}:${key}`;
+  }
+
+  async getPrincipalBinding(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    providerUserId: string
+  ): Promise<ExternalPrincipalBinding | null> {
+    const key = this.bindingKey(tenantId, provider, installationId, providerUserId);
+    return this.principalBindings.get(key) ?? null;
+  }
+
+  async registerPrincipalBinding(binding: ExternalPrincipalBinding): Promise<void> {
+    const key = this.bindingKey(
+      binding.tenantId,
+      binding.provider,
+      binding.installationId,
+      binding.providerUserId
+    );
+    this.principalBindings.set(key, { ...binding });
+  }
+
+  async getAgentPrincipal(tenantId: TenantId, principalId: string): Promise<AgentPrincipal | null> {
+    return this.agentPrincipals.get(`${tenantId}:${principalId}`) ?? null;
+  }
+
+  async registerAgentPrincipal(principal: AgentPrincipal): Promise<void> {
+    this.agentPrincipals.set(`${principal.tenantId}:${principal.principalId}`, { ...principal });
+  }
+
+  async getInboundReceipt(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    providerEventId: string
+  ): Promise<InboundEventReceipt | null> {
+    const key = this.inboundKey(tenantId, provider, installationId, providerEventId);
+    return this.inboundReceipts.get(key) ?? null;
+  }
+
+  async recordInboundReceipt(receipt: InboundEventReceipt): Promise<void> {
+    const key = this.inboundKey(
+      receipt.tenantId,
+      receipt.provider,
+      receipt.installationId,
+      receipt.providerEventId
+    );
+    const existing = this.inboundReceipts.get(key);
+    if (existing) {
+      if (existing.payloadDigest !== receipt.payloadDigest) {
+        throw new HarnessError(
+          'CONFLICTING_EVENT_PAYLOAD',
+          `Conflicting payload digest under existing inbound event ${receipt.providerEventId}`
+        );
+      }
+      return;
+    }
+    this.inboundReceipts.set(key, { ...receipt });
+  }
+
+  async getCase(tenantId: TenantId, caseId: PayableCaseId): Promise<PayableCase | null> {
+    return this.cases.get(this.caseKey(tenantId, caseId)) ?? null;
+  }
+
+  async saveCase(c: PayableCase): Promise<void> {
+    this.cases.set(this.caseKey(c.tenantId, c.caseId), {
+      ...c,
+      sourceLinks: [...c.sourceLinks],
+    });
+  }
+
+  async findCaseByThread(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    threadId: string
+  ): Promise<PayableCaseId | null> {
+    return this.threadCaseLinks.get(this.threadKey(tenantId, provider, installationId, threadId)) ?? null;
+  }
+
+  async linkThreadToCase(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    threadId: string,
+    caseId: PayableCaseId
+  ): Promise<void> {
+    this.threadCaseLinks.set(this.threadKey(tenantId, provider, installationId, threadId), caseId);
+  }
+
+  async getAssignment(tenantId: TenantId, assignmentId: AssignmentId): Promise<Assignment | null> {
+    const a = this.assignments.get(this.assignmentKey(tenantId, assignmentId));
+    return a ? { ...a } : null;
+  }
+
+  async saveAssignment(assignment: Assignment): Promise<void> {
+    this.assignments.set(this.assignmentKey(assignment.tenantId, assignment.assignmentId), {
+      ...assignment,
+    });
+  }
+
+  async saveRun(run: AgentRun): Promise<void> {
+    this.runs.set(`${run.tenantId}:${run.assignmentId}:${run.runId}`, { ...run });
+  }
+
+  async getRun(tenantId: TenantId, assignmentId: AssignmentId, runId: string): Promise<AgentRun | null> {
+    return this.runs.get(`${tenantId}:${assignmentId}:${runId}`) ?? null;
+  }
+
+  async saveCheckpoint(checkpoint: Checkpoint): Promise<void> {
+    this.checkpoints.set(
+      `${checkpoint.tenantId}:${checkpoint.assignmentId}:${checkpoint.checkpointId}`,
+      { ...checkpoint, inputRefs: [...checkpoint.inputRefs], outputRefs: [...checkpoint.outputRefs] }
+    );
+  }
+
+  async getCheckpoints(tenantId: TenantId, assignmentId: AssignmentId): Promise<readonly Checkpoint[]> {
+    const prefix = `${tenantId}:${assignmentId}:`;
+    const results: Checkpoint[] = [];
+    for (const [k, v] of this.checkpoints) {
+      if (k.startsWith(prefix)) {
+        results.push({ ...v });
+      }
+    }
+    return results.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+  }
+
+  async getCommandReceipt(
+    tenantId: TenantId,
+    scope: string,
+    commandKey: string
+  ): Promise<CommandReceipt | null> {
+    const key = this.commandKey(tenantId, scope, commandKey);
+    return this.commandReceipts.get(key) ?? null;
+  }
+
+  async saveCommandReceipt(receipt: CommandReceipt): Promise<void> {
+    const key = this.commandKey(receipt.tenantId, receipt.scope, receipt.commandKey);
+    const existing = this.commandReceipts.get(key);
+    if (existing) {
+      if (existing.payloadDigest !== receipt.payloadDigest) {
+        throw new HarnessError(
+          'COMMAND_RECEIPT_CONFLICT',
+          `Command receipt conflict: key ${receipt.commandKey} already exists with different payload digest`
+        );
+      }
+      return;
+    }
+    this.commandReceipts.set(key, { ...receipt });
+  }
+
+  async recordExecutionEvent(event: ExecutionEvent): Promise<void> {
+    this.executionEvents.push({ ...event });
+  }
+
+  async getExecutionEvents(tenantId: TenantId, aggregateId: string): Promise<readonly ExecutionEvent[]> {
+    return this.executionEvents
+      .filter((e) => e.tenantId === tenantId && e.aggregateId === aggregateId)
+      .sort((a, b) => a.aggregateVersion - b.aggregateVersion);
+  }
+
+  async enqueueOutbox(event: OutboxEvent): Promise<void> {
+    this.outboxEvents.push({ ...event });
+  }
+
+  async drainOutbox(tenantId: TenantId, limit = 50): Promise<readonly OutboxEvent[]> {
+    const now = new Date().toISOString();
+    const drained: OutboxEvent[] = [];
+    for (const evt of this.outboxEvents) {
+      if (evt.tenantId === tenantId && !evt.dispatchedAt) {
+        evt.dispatchedAt = now;
+        drained.push({ ...evt });
+        if (drained.length >= limit) break;
+      }
+    }
+    return drained;
+  }
+}
