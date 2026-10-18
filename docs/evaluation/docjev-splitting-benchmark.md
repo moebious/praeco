@@ -1,6 +1,8 @@
 # L1 — Jev/DocJev synthetic packet-splitting benchmark
 
-**Status:** Experimental; no L1, L2, or L3 runtime modifications. Tests and model inference must be verified after PR review.
+**Status:** Experimental; no L1, L2, or L3 runtime modifications. No changes to authoritative L1/L2/L3 runtime.
+
+**Observed live result (2026-10-18, [run 39116954487](https://github.com/moebious/praeco/actions/runs/39116954487), Jev 1.14 via OpenRouter):** 5/5 exact packets; document boundaries 6 TP / 0 FP / 0 FN; 0 review flags; 0 warnings; 5 Jev invocations at ~260–290 ms decision time and ~$0.00005 per packet (~$0.00027 total). The same-category continuation case (invoice p1–2, invoice p3–4) and the mixed invoice/contract/invoice packet both split exactly. Synthetic packets and machine-authored labels only; field-level accuracy remains a separate, unevaluated measurement.
 
 ## Goal and source controls
 
