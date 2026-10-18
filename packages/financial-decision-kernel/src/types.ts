@@ -39,6 +39,7 @@ export interface FinancialEvaluation {
   explanation: string;
   gateChecks: readonly GateCheckResult[];
   financialContextDigest: string;
+  intentDigestSha256: string;
   policyRevisionId: string;
   grantRevisionId: string;
 }
@@ -90,7 +91,10 @@ export interface BudgetDirectoryEntry {
   period: string; // YYYY-MM
   limitUsd: string;
   committedUsd: string;
+  /** Spend counter: bumped on every budget debit (optimistic concurrency). */
   revision: number;
+  /** Structural revision of the limit entry: bumped when the limit itself changes. */
+  limitRevision: number;
 }
 
 export interface PolicyConfig {

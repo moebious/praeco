@@ -111,6 +111,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '5000.00',
         committedUsd: '0.00',
         revision: 1,
+        limitRevision: 1,
       });
       break;
     }
@@ -140,6 +141,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '5000.00',
         committedUsd: '0.00',
         revision: 1,
+        limitRevision: 1,
       });
       break;
     }
@@ -168,6 +170,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '4500.00',
         committedUsd: '0.00',
         revision: 1,
+        limitRevision: 1,
       });
       break;
     }
@@ -196,6 +199,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '4000.00',
         committedUsd: '0.00',
         revision: 1,
+        limitRevision: 1,
       });
       break;
     }
@@ -224,6 +228,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '4000.00',
         committedUsd: '2200.00',
         revision: 1,
+        limitRevision: 1,
       });
       // Preseeded obligation with matching canonical key AND matching intent digest (real duplicate)
       const canonicalKey = buildCanonicalPayableKey(
@@ -264,6 +269,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '4000.00',
         committedUsd: '0.00',
         revision: 1,
+        limitRevision: 1,
       });
       break;
     }
@@ -292,6 +298,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '1400.00', // available $1,400 < $2,100
         committedUsd: '0.00',
         revision: 1,
+        limitRevision: 1,
       });
       break;
     }
@@ -320,6 +327,7 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         limitUsd: '4000.00',
         committedUsd: '0.00',
         revision: 1,
+        limitRevision: 1,
       });
       break;
     }

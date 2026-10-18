@@ -122,9 +122,25 @@ export function evaluateGateG3(
   }
 
   const cleanTaxId = canonicalizeTaxId(rawTaxId);
-  const vendor = context.vendors.find(
+  const matches = context.vendors.filter(
     v => canonicalizeTaxId(v.taxId) === cleanTaxId
   );
+
+  // Fail closed when the directory itself is ambiguous: two entries resolving
+  // to the same canonical tax ID make beneficiary identity indeterminate, so
+  // the payable must be blocked rather than silently resolved to the first.
+  if (matches.length > 1) {
+    return {
+      gate: 'G3',
+      status: 'FAIL',
+      code: 'VENDOR_DIRECTORY_AMBIGUOUS',
+      explanation: 'Ambigüedad del directorio de proveedores: varios proveedores con el mismo identificador fiscal canónico.',
+      evidenceRefs: getEvidenceIds(envelope.invoice.beneficiary.taxId),
+      authoritativeRecordRefs: matches.map(v => v.vendorId),
+    };
+  }
+
+  const vendor = matches[0];
 
   if (!vendor || !vendor.isAllowlisted) {
     return {

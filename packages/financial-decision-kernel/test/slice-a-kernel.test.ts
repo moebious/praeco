@@ -51,6 +51,7 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
             limitUsd: '5000.00',
             committedUsd: '0.00',
             revision: 1,
+            limitRevision: 1,
           },
         ],
       });
@@ -98,6 +99,7 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
             limitUsd: '5000.00',
             committedUsd: '0.00',
             revision: 1,
+            limitRevision: 1,
           },
         ],
       });
@@ -145,6 +147,7 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
             limitUsd: '4500.00',
             committedUsd: '0.00',
             revision: 1,
+            limitRevision: 1,
           },
         ],
         policy: {
@@ -199,6 +202,7 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
             limitUsd: '4000.00',
             committedUsd: '0.00',
             revision: 1,
+            limitRevision: 1,
           },
         ],
       });
@@ -308,6 +312,7 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
             limitUsd: '1400.00',
             committedUsd: '0.00',
             revision: 1,
+            limitRevision: 1,
           },
         ],
       });
