@@ -14,7 +14,7 @@
 | Ready envelopes / expected ready | 20 / 20 |
 | USD normalization expectations matched | 33 / 33 |
 | Verified citation references | 376 |
-| Local pipeline latency p50 / p95 | 164.09 ms / 3,440.08 ms |
+| Local pipeline latency p50 / p95 | 132.27 ms / 2,851.81 ms |
 
 The expected statuses and normalization values are machine-authored synthetic expectations reviewed in code. Independent human field annotation is pending, so full critical-field accuracy remains unmeasured. Raster samples are intentionally non-ready with the local parser. These results validate deterministic fixture behavior, not hosted provider quality, production accuracy or L2 decisions. This run overlapped the full check on the same host; its timings are observations under concurrent load, not a performance baseline.
 
@@ -60,8 +60,8 @@ Observed 2026-10-18 UTC for the local integration slice:
 | Command / check | Result |
 | --- | --- |
 | `npm ci` | Passed |
-| `npm run check` | Both workspaces typecheck/build; 103 core tests + 18 integration tests passed |
-| `npm run test:l1:integration` | 18 / 18 passed explicitly |
+| `npm run check` | Both workspaces typecheck/build; 111 core tests + 25 integration tests passed |
+| `npm run test:l1:integration` | 25 / 25 passed explicitly |
 | `npm run l1:demo` | Ready, accepted verification; COP 8,000,000 normalized to USD 2,000.00 |
 | `npm run l1:evaluate` | 30 / 30 status matches; 33 / 33 normalization matches; zero unsafe-ready cases |
 | Canonical contract / ADR / corpus changes | None; contract Git hash remains `ee1f94a797cd461b5fcfa394dd7ebe8cd8d18fd9` |
@@ -69,3 +69,9 @@ Observed 2026-10-18 UTC for the local integration slice:
 | Built integration package smoke / package manifest | Mock Bill import and trusted read passed; dry-run package contains no tests or expected outcomes |
 | Docker image build/run | Not run: local Docker daemon unavailable |
 | Live provider smoke | Not run for this integration change; no hosted provider calls |
+
+## PR #4 adversarial review follow-up
+
+Seven citation regressions and the supplemental-context result regression failed against `55a1d47` before correction. The current adapter restricts recovery to exact field-schema placeholders with one complete match on the cited page, retains recovery/rejection audit entries and keeps invalid citations reviewable beside valid ones. New tests cover wrong/nonexistent pages, unrelated text, wrong-field placeholders and repeated labelled values.
+
+External receipts now require a run ID and explicit disposition. Tests reject empty invoice results, missing runs, relabelled run dispositions and legacy draft receipts; they also check supplemental source integrity without envelopes and preserve failed processing as a non-ready run-linked result. The additive runtime API is covered while existing `process()` behavior remains compatible. The latest full check passes **136 tests**. No live hosted smoke was run for the narrower citation policy.
