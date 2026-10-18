@@ -4,10 +4,10 @@ on:
     # The workflow runs the whole-repo gate (npm run check), so every code path
     # must be covered — L1 paths were already listed; L2/L3 and app changes were
     # silently skipping CI verification.
-    paths: ['packages/**', 'apps/**', 'docs/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
+    paths: ['packages/**', 'apps/**', 'docs/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml', '.github/workflows/l1-docjev-splitting.yml', 'scripts/docjev-splitting-benchmark.py', 'scripts/test_docjev_splitting.py']
   push:
     branches: [main]
-    paths: ['packages/**', 'apps/**', 'docs/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
+    paths: ['packages/**', 'apps/**', 'docs/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml', '.github/workflows/l1-docjev-splitting.yml', 'scripts/docjev-splitting-benchmark.py', 'scripts/test_docjev_splitting.py']
 permissions:
   contents: read
 jobs:
@@ -19,6 +19,13 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline packet fixture dependencies
+        run: python -m pip install 'reportlab>=4,<5' 'pypdf>=5,<7'
+      - name: Verify Jev packet scorer and synthetic fixtures (no inference)
+        run: python -m unittest discover -s scripts -p 'test_docjev_splitting.py'
       - run: npm ci
       - run: npm run check
       - run: npm run l1:process
