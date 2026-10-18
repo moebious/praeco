@@ -13,8 +13,9 @@ Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Bl
 | Component | Ownership | Status |
 | --- | --- | --- |
 | **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | Local runtime and LlamaIndex adapters implemented; live cloud/OCR validation pending |
-| **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Kernel, approvals, trusted L1 reader adapter and operations dashboard implemented with a synthetic in-memory ledger; SQL-backed persistence and L3 integration pending |
-| **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Slice A operational schema, idempotency and fencing implemented; P0 runs on the in-process deterministic demo runtime of ADR-007 (Trigger.dev/Neon swap-in pending) |
+| **Document classification · DocJev + Jev 1.14** | Packet segmentation proposals through a typed fail-closed adapter | Live benchmark on synthetic packets: 5/5 exact, boundaries 6 TP / 0 FP / 0 FN; verified segments drive L1 extraction and the L3 Vera flow; classification never determines evidence readiness or authorization |
+| **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Kernel, approvals, trusted L1 reader adapter and operations dashboard implemented; the ADR-003 SQL transaction boundary is proven in CI against PostgreSQL while the in-memory synthetic ledger remains the demo default |
+| **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Specialist roles, durable workflow runner, L1/L2 orchestration and the verified-segment packet flow implemented; P0 runs on the in-process deterministic demo runtime of ADR-007 (Trigger.dev/Neon swap-in pending) |
 | **DEMO-001 · Synthetic AP Environment** | Test fixtures, reference data, seed/reset/replay and test-only oracle | Handoff prepared; integration pending |
 | **DEMO-002 · AgentMail intake** | Email ingestion adapter | Proposed, not required for core golden-set tests |
 
@@ -26,7 +27,7 @@ Eight synthetic payable scenarios cover two automatic simulated authorizations, 
 
 ```text
 apps/              # Finance operations dashboard (serves the L2 inspector UI)
-packages/          # L1 evidence intelligence, external intake, and the L2 decision kernel
+packages/          # L1 evidence intelligence, external intake, L2 decision kernel, SQL store slice, document-classification adapter, agent harness
 integrations/      # AgentMail, Daytona and other adapters (as needed)
 demo/              # Synthetic AP environment, replay, evaluation
 docs/              # Architecture decisions and specifications
@@ -45,6 +46,21 @@ The separate [external-document intake package](packages/external-document-intak
 
 `npm run test:l2` exercises the decision kernel, transactional semantics, human-approval lifecycle and a trusted L1 `reader.loadReady` integration against a real synthetic PDF. `npm run l2:demo` evaluates the eight canonical Blinka scenarios through the six gates and demonstrates one simulated FinanceAdmin approval; `npm run l2:web` serves the operations dashboard at `http://localhost:3000`. The L2 store is an in-process synthetic ledger for the hackathon, not the SQL-backed authoritative store required by ADR-003, and no real payments are ever made: `AUTHORIZED_SIMULATED` never means `PAID`.
 
+## Document understanding (DocJev + Jev 1.14)
+
+Real mail arrives as mixed packets: several invoices, continuation pages and supporting contracts inside one document. The [document-classification adapter](packages/document-classification-adapter/README.md) wires DocJev/Jev into the pipeline as **proposals only**:
+
+- Jev proposes where each distinct document starts and ends; a typed, fail-closed adapter validates every packet — complete page coverage, no overlaps, recognized categories, source-hash match — and never surfaces provider probabilities.
+- Verified segments drive L1 extraction through the frozen `DocumentSegment` seam (`classifiedBy: 'DOCJEV'`), preserving original page numbers in every citation.
+- Only invoice segments become extraction candidates; contract and supplemental pages stay context; review-flagged segments can never become `READY`.
+- Evidence: the [live benchmark](docs/evaluation/docjev-splitting-benchmark.md) scored 5/5 exact synthetic packets with boundaries 6 TP / 0 FP / 0 FN. Field-level extraction accuracy is a separate, still-unevaluated measurement.
+
+Jev never determines evidence readiness or financial authorization — verified evidence and the six deterministic gates decide. The offline default runs on fixture classifications; live Jev runs are manual, gated behind the `evaluation` environment, and billed to OpenRouter.
+
+## Run L3
+
+`npm run test:l3` exercises the agent harness end to end: Vera ingestion and source linking, Kael read-only policy preview, Nova's commit flow, human-approval waits, and the verified-segment packet flow in which one mixed packet splits into two invoices that both authorize through the real six-gate kernel. Everything is offline and deterministic (ADR-007): no live model calls in tests.
+
 ## Contribution workflow
 
 Use **[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)** from the first commit:
@@ -59,4 +75,4 @@ See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md) 
 
 ## License and scope
 
-The repository is public for the hackathon. No production authorization guarantee is claimed until L2/L3 and adversarial end-to-end tests are implemented and validated.
+The repository is public for the hackathon. No production authorization guarantee is claimed: hosted OCR accuracy, field-level extraction accuracy and adversarial end-to-end validation remain unproved.
