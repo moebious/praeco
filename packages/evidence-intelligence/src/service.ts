@@ -154,7 +154,9 @@ export function createL1(options: L1Options): L1Runtime {
             const envelope = parseEnvelope({ schemaVersion: L1_CONTRACT_VERSION, processingStatus: status, envelopeId: `env-${randomUUID()}`, pipelineRunId, source,
               ...(draft.segment ? { segment: draft.segment } : {}), invoice: verified.invoice, normalization: verified.normalization, evidence: draft.evidence,
               verification: verified.report, artifacts: [...new Map([...artifacts, replayArtifact, reportArtifact].map(a => [a.artifactId, a])).values()],
-              provenance: { ...provenance, classification: { provider: draft.segment ? 'RULE' : 'SKIPPED', version: 'explicit-page-v1' } }, completedAt: now(), errors: [] });
+              provenance: { ...provenance, classification: draft.segment
+                ? { provider: draft.segment.classifiedBy === 'DOCJEV' ? 'DOCJEV' : 'RULE', version: draft.segment.classifiedBy === 'DOCJEV' ? 'docjev-verified-v1' : 'explicit-page-v1' }
+                : { provider: 'SKIPPED', version: 'explicit-page-v1' } }, completedAt: now(), errors: [] });
             outputs.push(envelope);
           } catch (error) { outputs.push(failed(error)); }
         }

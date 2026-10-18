@@ -53,6 +53,30 @@ if (packet.reviewRequired) {
 }
 ```
 
+## L1 integration (segmented extraction)
+
+`SegmentedLabelledTextExtractor` implements L1's `ExtractionPort` so the frozen
+L1 v3.0.0 wire contract stays untouched:
+
+- Verified packet segments (from `validateSplitResult` or the live
+  `DocJevClassificationSource`) group parsed pages into candidate invoices via
+  `DocumentSegment` with `classifiedBy: 'DOCJEV'`.
+- Only invoice-category segments become extraction candidates; contracts,
+  supplemental context and unknown pages stay context with no invoice draft.
+- Continuation pages merge into one invoice, with every citation keeping its
+  ORIGINAL page number and artifact — nothing is renumbered or re-quoted.
+- Fail-closed rules: contradictory restatements become CONFLICTING fields;
+  line items spanning multiple pages (page-local numbering cannot distinguish
+  continuation items from restatements) route to review; review-flagged
+  segments carry `DOCJEV_REVIEW_REQUIRED` so the verifier can never mark them
+  READY; missing classifications keep the conservative base behavior.
+- The L1 runtime records honest provenance: DOCJEV-classified segments report
+  `provenance.classification.provider = 'DOCJEV'` (the contract's own enum).
+
+The workflow runner gained an explicit `envelopeId` binding so a payable case
+can name which verified invoice envelope of a multi-invoice packet it owns;
+single-invoice sources keep the first-envelope default.
+
 ## Evidence and status
 
 The wire contract mirrors the pinned DocJev revision
