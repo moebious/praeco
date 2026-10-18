@@ -1,62 +1,99 @@
 # Praeco
 
-**Autonomous, governed financial operations.**
+**An AI teammate for governed accounts payable.**
 
-**Repository version:** 1.0.0. The L1 `3.0.0` value identifies its internal wire contract, not the Praeco release.
+Praeco coordinates invoice intake, source-backed evidence, deterministic financial checks, and human review. Its specialists prepare and explain work; a dedicated financial kernel decides whether a payable qualifies for simulated authorization.
 
-Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Blinka Challenge**. It explores a domain-specific autonomous Accounts Payable team: intake invoices, extract source-backed financial facts, evaluate company policies deterministically, and produce auditable simulated decisions.
+Built for the **30X Hackathon · Blinka Challenge**. The demo uses fictional companies, vendors, invoices, and fixed exchange rates. **No real money moves.**
 
-> **Hackathon safety boundary:** No real money moves. `AUTHORIZED_SIMULATED` does **not** mean a bill has been paid. Only synthetic company, vendor, contract, and invoice data may be committed.
+## How it works
 
-## Architecture
+Praeco separates operational work, documentary evidence, and financial authority into three layers.
 
-| Component | Ownership | Status |
-| --- | --- | --- |
-| **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | Local runtime and LlamaIndex adapters implemented; live cloud/OCR validation pending |
-| **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Kernel, approvals, trusted L1 reader adapter and operations dashboard implemented; optional PostgreSQL commit adapter persists authorized commits, while the default demo and pending-approval lifecycle remain in-memory; L3 integration pending |
-| **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Slice A operational schema, idempotency and fencing implemented; P0 runs on the in-process deterministic demo runtime of ADR-007 (Trigger.dev/Neon swap-in pending) |
-| **DEMO-001 · Synthetic AP Environment** | Test fixtures, reference data, seed/reset/replay and test-only oracle | Handoff prepared; integration pending |
-| **DEMO-002 · AgentMail intake** | Email ingestion adapter | Proposed, not required for core golden-set tests |
-
-### Golden set
-
-Eight synthetic payable scenarios cover two automatic simulated authorizations, one human escalation and five hard blocks. The *expected* outcomes are test-only and must never be available to runtime agents or financial policy evaluation.
-
-### Repository layout
-
-```text
-apps/              # Finance operations dashboard (serves the L2 inspector UI)
-packages/          # L1 evidence intelligence, external intake, L2 kernel, and SQL commit adapter
-integrations/      # AgentMail, Daytona and other adapters (as needed)
-demo/              # Synthetic AP environment, replay, evaluation
-docs/              # Architecture decisions and specifications
-scripts/           # Development and repository checks
+```mermaid
+flowchart TD
+    Sources["Invoice and supporting documents"] --> L3["L3 · Agent harness"]
+    L3 -->|"Register and inspect sources"| L1["L1 · Evidence intelligence"]
+    L3 -->|"Submit evidence references"| L2["L2 · Financial kernel"]
+    L1 -->|"Trusted verified evidence"| L2
+    L2 -->|"Decision and audit references"| L3
+    L2 -->|"Eligible threshold exception"| Human["Authenticated FinanceAdmin review"]
+    Human -->|"Reevaluate current controls"| L2
+    L3 --> Result["Case status and explanation"]
 ```
 
-Directories are added as their implementations land. The accepted L1 wire contract is preserved.
+| Layer | Responsibility | Boundary |
+| --- | --- | --- |
+| **L1 · Evidence intelligence** | Parse documents, ground extracted facts in retained sources, verify citations, and normalize amounts | Readiness establishes documentary evidence, not permission to spend |
+| **L2 · Financial kernel** | Apply six deterministic gates, enforce duplicate and budget controls, record decisions, and resolve approvals | Sole financial authority |
+| **L3 · Agent harness** | Coordinate specialists, cases, assignments, checkpoints, channel identities, and outcome notifications | Operational memory and conversations cannot override L2 |
 
-## Run L1
+Document classification proposes packet boundaries. L1 validates evidence within those boundaries; L2 independently evaluates the payable. See the [classification adapter](packages/document-classification-adapter/README.md).
 
-Use Node 22.12+ and npm. Run `npm ci`, `npm run check`, and `npm run l1:demo` for a synthetic offline invoice. See the [L1 provisioning and integration guide](docs/architecture/l1-runtime.md) for hosted LlamaParse/LlamaExtract configuration and L2/L3 integration. The offline extractor is explicitly labelled; passing local tests does not establish hosted OCR accuracy or financial authorization safety.
+### Financial outcomes
 
-The separate [external-document intake package](packages/external-document-intake/README.md) preserves mock ERP attachment provenance and revisions without changing L1's wire contract. Run `npm run test:l1:integration` to exercise it.
+| Outcome | Meaning |
+| --- | --- |
+| `AUTHORIZED_SIMULATED` | The payable passed the applicable controls; no funds were transferred |
+| `PENDING_HUMAN_APPROVAL` | An eligible threshold exception needs authenticated review |
+| `BLOCKED` | A financial control prevents authorization |
 
-## Run L2
+The six gates check evidence integrity, duplicates, beneficiary and account eligibility, contract terms, period budget, and delegated auto-approval limits. Human approval cannot override a hard failure.
 
-`npm run test:l2` exercises the decision kernel, transactional semantics, human-approval lifecycle and a trusted L1 `reader.loadReady` integration against a real synthetic PDF. `npm run l2:demo` evaluates the eight canonical Blinka scenarios through the six gates and demonstrates one simulated FinanceAdmin approval; `npm run l2:web` serves the operations dashboard at `http://localhost:3000`. The optional `@praeco/financial-store-sql` adapter commits authorized payables and approval-time authorizations through PostgreSQL transactions. Run its transaction and integration tests against a disposable PostgreSQL database with `DATABASE_URL=... npm run test --workspace @praeco/financial-store-sql`; CI supplies a fresh PostgreSQL service. Pending approvals and non-commit decisions remain in-memory, so this is not full ADR-003 persistence or production readiness. No real payments are ever made: `AUTHORIZED_SIMULATED` never means `PAID`.
+## Try the demo
 
-## Contribution workflow
+Use **Node.js 22.12+** and npm. From the repository root:
 
-Use **[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)** from the first commit:
+```bash
+npm ci
+npm run check
+npm run demo
+```
 
-- `feat(l1): implement source digest verification`
-- `fix(l2): prevent duplicate budget reservations`
-- `test(demo): cover unknown beneficiary case`
-- `docs(architecture): document payable-case ownership`
-- `chore(repo): initialize Praeco repository`
+The default demo runs offline with deterministic synthetic inputs. It covers eight cases: a contractor invoice, a recurring SaaS bill, an above-threshold agency invoice, a contract mismatch, a forwarded duplicate, an unknown beneficiary, insufficient budget, and a changed bank account.
 
-See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md) before generating implementation code.
+To open the finance dashboard:
 
-## License and scope
+```bash
+npm run web
+```
 
-The repository is public for the hackathon. No production authorization guarantee is claimed until L2/L3 and adversarial end-to-end tests are implemented and validated.
+Open [localhost:3000](http://localhost:3000). The server prints a session token for protected mutations; enter it in the dashboard. This dashboard runs the L2 scenario inspector, rather than a complete authenticated multichannel workspace.
+
+### Development commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run check` | Build, typecheck, and run workspace tests |
+| `npm run l1:demo` | Process an offline synthetic invoice through L1 |
+| `npm run test:l1:integration` | Test external documentary intake and provenance |
+| `npm run test:l2` | Test financial gates and approval behavior |
+| `npm run test:l3` | Test orchestration, channel adapters, and recovery behavior |
+
+PostgreSQL suites require a disposable database and otherwise skip. Follow the [SQL store guide](packages/financial-store-sql/README.md). Hosted document processing is opt-in; configuration lives in the [L1 runtime guide](docs/architecture/l1-runtime.md).
+
+## Packages
+
+| Package or app | Purpose |
+| --- | --- |
+| [Evidence intelligence](packages/evidence-intelligence/README.md) | Source registry, extraction, verification, and normalization |
+| [Document classification](packages/document-classification-adapter/README.md) | DocJev/Jev packet segmentation and L1 extraction adapter |
+| [External document intake](packages/external-document-intake/README.md) | External object revisions and documentary provenance |
+| [Financial decision kernel](packages/financial-decision-kernel/README.md) | Deterministic policies, approvals, and financial outcomes |
+| [Financial SQL store](packages/financial-store-sql/README.md) | Atomic successful commitments and durable result recovery |
+| [Agent harness](packages/agent-harness/README.md) | Specialists, orchestration, channel adapters, and operational storage |
+| [Finance dashboard](apps/finance-dashboard/README.md) | Local scenario inspector and approval controls |
+
+## Current scope
+
+- L1, L2, and L3 are integrated in synthetic tests. These tests do not establish real-world extraction accuracy or production readiness.
+- PostgreSQL adapters exist for L3 operational state and L2 successful commitments. L2 pending approvals, non-commit decisions, trusted financial context, and transactional outbox are not fully persisted.
+- Workflow execution remains in-process. PostgreSQL storage does not by itself provide a deployed, cross-process durable workflow engine; Trigger.dev integration remains future work.
+- Email, AgentMail, web, and linked Telegram adapters are library components. Live provider authentication, attachment transport, and the complete deployed operator journey still require validation. The AI tool bridge is exercised through scripted loops; live Vercel AI SDK execution is not established.
+- OCR-assisted documents remain review-only. Independent field-level accuracy evaluation and validation of the current hosted citation policy remain outstanding.
+
+## Architecture and contribution
+
+Read the [solution design](docs/architecture/solution-design.md), [architecture decisions](docs/adr), and [contribution guide](docs/CONTRIBUTING.md). Package READMEs describe current entry points; detailed contracts and evaluation evidence live under [`docs/`](docs).
+
+Licensed under [MIT](LICENSE).

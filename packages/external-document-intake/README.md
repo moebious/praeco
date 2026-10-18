@@ -1,8 +1,23 @@
 # External document intake
 
-Backend-only documentary intake and provenance for Praeco integrations. The package wraps existing L1 registration/processing, stores external object revisions separately and returns persisted evidence references for L3. Every result includes a persisted run ID and explicit source disposition; supplemental context returns no invoice. It never makes a financial decision.
+Backend-only documentary intake and provenance for Praeco integrations. This package registers immutable snapshots through L1 and records external provider, object, and revision bindings separately from invoice evidence.
 
-- [Integration impact, provenance and trust boundaries](../../docs/architecture/external-document-intake.md)
-- [L1 runtime and trusted readers](../../docs/architecture/l1-runtime.md)
+## Behavior
 
-`MOCK_ERP` is synthetic. QuickBooks, Xero and Blinka names are metadata values; no real provider integration or credentials are included. Run `npm run test:l1:integration` from the repository root.
+- Preserve external document revisions and source hashes.
+- Return persisted source, processing-run, and envelope references for L3.
+- Distinguish invoice input from supplemental context, which may produce no invoice envelope.
+- Keep accounting metadata separate from verified documentary facts.
+
+`MOCK_ERP` is synthetic. QuickBooks, Xero, and Blinka identifiers are metadata values, not implemented live integrations. The package does not make financial decisions.
+
+## Test
+
+From the repository root:
+
+```bash
+npm run build
+npm run test:l1:integration
+```
+
+See the [intake contract and trust boundaries](../../docs/architecture/external-document-intake.md) and [L1 trusted readers](../../docs/architecture/l1-runtime.md).

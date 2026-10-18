@@ -1,4 +1,4 @@
-# @praeco/financial-store-sql
+# Financial SQL store · L2
 
 PostgreSQL transaction adapter for L2's simulated authorization commits.
 
@@ -6,10 +6,9 @@ PostgreSQL transaction adapter for L2's simulated authorization commits.
 connects it to `FinancialAuthorizationService` for auto-authorization and
 approval-time commits. The default kernel/demo path remains in-memory. Trusted
 context, pending approvals, and non-commit decisions are not SQL-backed, so
-this is a partial persistence integration, not full ADR-003 completion or a
-production-ready store.
+this adapter provides partial financial persistence.
 
-## Transaction guarantees
+## Successful authorization transaction
 
 One database transaction per simulated authorization:
 
@@ -62,3 +61,10 @@ DATABASE_URL=postgres://postgres@localhost:5432/praeco_test npm run demo --works
 ```
 
 No real payments; every value is synthetic demo data (see AGENTS.md).
+
+## References
+
+- [Public exports](src/index.ts)
+- [SQL transaction](src/sql-store.ts)
+- [Kernel commit adapter](src/sql-commit-port.ts)
+- [Ledger architecture](../../docs/adr/003-governed-wallets-transactional-ledger.md)
