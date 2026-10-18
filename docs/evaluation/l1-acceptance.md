@@ -1,6 +1,22 @@
 # L1 — Evidence and extraction acceptance plan
 
-**This is a test specification, not executed test results.**
+**This file defines acceptance criteria and records the latest offline corpus run.** Passing this machine-authored suite does not establish independent extraction accuracy.
+
+## Latest offline run
+
+**Observed:** 2026-10-18 UTC via `npm run l1:evaluate` against the 30-document synthetic corpus.
+
+| Measure | Result |
+|---|---:|
+| Documents / output envelopes | 30 / 33 |
+| Expected document statuses matched | 30 / 30 |
+| Unsafe ready envelopes | 0 |
+| Ready envelopes / expected ready | 20 / 20 |
+| USD normalization expectations matched | 33 / 33 |
+| Verified citation references | 376 |
+| Local pipeline latency p50 / p95 | 164.09 ms / 3,440.08 ms |
+
+The expected statuses and normalization values are machine-authored synthetic expectations reviewed in code. Independent human field annotation is pending, so full critical-field accuracy remains unmeasured. Raster samples are intentionally non-ready with the local parser. These results validate deterministic fixture behavior, not hosted provider quality, production accuracy or L2 decisions. This run overlapped the full check on the same host; its timings are observations under concurrent load, not a performance baseline.
 
 ## Synthetic evaluation corpus: 30 documents minimum
 
@@ -30,3 +46,26 @@
 10. L2 may never autoauthorize non-ready L1 envelopes.
 
 Release condition: zero unsafe-ready cases and zero accepted critical fields without verified evidence in the labeled corpus. Preserve real failures, logs and traces.
+
+## External document integration
+
+`npm run test:l1:integration` exercises the separate external-document adapter against real local L1 processing and persisted readers. Coverage includes repeated delivery, immutable revisions, content-digest snapshots, external metadata retention, tenant isolation, ERP/document disagreement, absent attachments, missing documentary account evidence, revoked/unavailable connections, receipt/source tampering and historical replay without external access. See the [provenance specification](../architecture/external-document-intake.md).
+
+These are synthetic integration boundary tests. They do not validate real ERP/Blinka APIs, OAuth, financial authorization or hosted OCR quality. The canonical contract, 30-document corpus and expected financial decisions remain unchanged.
+
+### Executed validation
+
+Observed 2026-10-18 UTC for the local integration slice:
+
+| Command / check | Result |
+| --- | --- |
+| `npm ci` | Passed |
+| `npm run check` | Both workspaces typecheck/build; 103 core tests + 18 integration tests passed |
+| `npm run test:l1:integration` | 18 / 18 passed explicitly |
+| `npm run l1:demo` | Ready, accepted verification; COP 8,000,000 normalized to USD 2,000.00 |
+| `npm run l1:evaluate` | 30 / 30 status matches; 33 / 33 normalization matches; zero unsafe-ready cases |
+| Canonical contract / ADR / corpus changes | None; contract Git hash remains `ee1f94a797cd461b5fcfa394dd7ebe8cd8d18fd9` |
+| Isolated L1 workspace install, build, production install and CLI | Passed without the integration workspace or test fixtures |
+| Built integration package smoke / package manifest | Mock Bill import and trusted read passed; dry-run package contains no tests or expected outcomes |
+| Docker image build/run | Not run: local Docker daemon unavailable |
+| Live provider smoke | Not run for this integration change; no hosted provider calls |
