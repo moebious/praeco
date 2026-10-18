@@ -6,6 +6,7 @@ import type {
 } from './types.js';
 import type { HarnessStore } from '../store.js';
 import { HarnessError } from '../state-machine.js';
+import { ensureHarnessWorkerGrant } from '../l2-grants.js';
 import { deriveL2IdempotencyKey, sha256Hex } from '../hashing.js';
 import {
   FinancialAuthorizationService,
@@ -162,6 +163,11 @@ export function createNovaTools(options: NovaToolsOptions): SpecialistToolDefini
       const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
       const scenarioStore = createScenarioStore(scenarioId);
       const service = options.authService ?? new FinancialAuthorizationService(scenarioStore, resolver);
+      // Nova requests simulated authorization: the worker operates under its
+      // own grant carrying exactly the REQUEST_SIMULATED_AUTHORIZATION action.
+      const agentGrantRef = ensureHarnessWorkerGrant(service.store, context.workerPrincipalId, [
+        'REQUEST_SIMULATED_AUTHORIZATION',
+      ]);
 
       const actor: TrustedActorContext = {
         tenantId: scenarioStore.tenantId,
@@ -176,7 +182,7 @@ export function createNovaTools(options: NovaToolsOptions): SpecialistToolDefini
             envelopeIds: [targetScenario.envelope.envelopeId],
           },
           workerId: context.workerPrincipalId,
-          agentGrantRef: 'grant-synthetic-worker',
+          agentGrantRef,
           idempotencyKey: intent.idempotencyKey,
         },
         actor

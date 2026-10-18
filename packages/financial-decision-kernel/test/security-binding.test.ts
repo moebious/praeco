@@ -110,7 +110,7 @@ describe('L2 security bindings — worker/grant identity, tenant isolation, appr
     expect(store.commitments.size).toBe(0);
   });
 
-  it('rejects a preview whose acting principal is not the worker bound to the grant', async () => {
+  it('permits a delegated principal to act while the grant stays bound to the command worker', async () => {
     const store = createScenarioStore('BLINKA-01');
     const resolver = new InMemoryEnvelopeResolver();
     const service = new FinancialAuthorizationService(store, resolver);
@@ -125,17 +125,18 @@ describe('L2 security bindings — worker/grant identity, tenant isolation, appr
     });
     resolver.register(env);
 
-    await expect(
-      service.preview(
-        {
-          proposal: { payableCaseId: 'case-sec-02', envelopeIds: ['env-bog-sec-02'] },
-          idempotencyKey: 'idem-sec-preview',
-          workerId: 'worker-agent-demo',
-          agentGrantRef: 'grant-synthetic-worker',
-        },
-        { tenantId: DEMO_TENANT_ID, principalId: 'principal-someone-else', roles: ['WorkerAgent'] }
-      )
-    ).rejects.toThrow('GRANT_PRINCIPAL_MISMATCH');
+    // L3 delegation model: the authenticated actor is a business principal
+    // delegating to the worker, which executes under its own grant.
+    const evaluation = await service.preview(
+      {
+        proposal: { payableCaseId: 'case-sec-02', envelopeIds: ['env-bog-sec-02'] },
+        idempotencyKey: 'idem-sec-preview',
+        workerId: 'worker-agent-demo',
+        agentGrantRef: 'grant-synthetic-worker',
+      },
+      { tenantId: DEMO_TENANT_ID, principalId: 'cfo-delegator', roles: ['FinanceAdmin'] }
+    );
+    expect(evaluation.outcome).toBe('AUTHORIZED_SIMULATED');
   });
 
   it('rejects approval resolution by a FinanceAdmin from a foreign tenant', async () => {
