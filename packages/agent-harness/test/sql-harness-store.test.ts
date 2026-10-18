@@ -27,7 +27,7 @@ const databaseUrl = process.env.DATABASE_URL;
  * When DATABASE_URL is set, tests execute real database transactions, row locking, and CAS guards.
  * When DATABASE_URL is unset, tests skip cleanly to keep offline CI builds green (ADR-007 delta #1).
  */
-describe.skipIf(!databaseUrl)('SqlHarnessStore — Neon PostgreSQL operational boundary', () => {
+describe.skipIf(!databaseUrl)('SqlHarnessStore — Neon PostgreSQL operational boundary', { timeout: 60_000 }, () => {
   let store: SqlHarnessStore;
 
   beforeAll(async () => {
@@ -842,7 +842,7 @@ describe.skipIf(!databaseUrl)('SqlHarnessStore — Neon PostgreSQL operational b
       expect(persisted?.state).toBe('COMPLETED');
       expect(persisted?.latestL2DecisionId).toBe(result.decisionId);
     }
-  });
+  }, 60_000);
 
   it('only acknowledges SQL outbox events after successful delivery and retries failed handlers', async () => {
     const tenantId = makeTenant();

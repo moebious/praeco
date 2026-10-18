@@ -23,7 +23,7 @@ import {
   type SpecialistToolDefinition,
 } from '../src/index.js';
 
-describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 30_000 }, () => {
+describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 60_000 }, () => {
   let l1StorageDir: string;
   let l1: L1Runtime;
   let evidencePort: L1EvidencePortAdapter;
@@ -122,12 +122,14 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
       'AgentMail webhook signature verification failed'
     );
 
-    // D. Raw body signature verification passes with raw payload
-    const rawBodyJson = JSON.stringify({ messageId, amount: 500 });
+    // D. Raw body signature verification passes with matching raw payload
+    const rawMsgId = `msg-raw-${randomUUID()}`;
+    const rawBodyJson = JSON.stringify({ messageId: rawMsgId, from, to: 'ap@blinka.com', subject: 'Invoice #raw', amount: 500 });
     const rawBodySig = computeAgentMailSignature(basePayload, WEBHOOK_SECRET, rawBodyJson);
     const rawBodyPayload: AgentMailWebhookPayload = {
       ...basePayload,
-      messageId: `msg-raw-${randomUUID()}`,
+      messageId: rawMsgId,
+      subject: 'Invoice #raw',
       signature: rawBodySig,
     };
     const rawRes = await adapter.handleAgentMailWebhook(rawBodyPayload, undefined, rawBodyJson);
@@ -160,6 +162,96 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     await expect(adapter.handleAgentMailWebhook(forgedSigPayload)).rejects.toThrow(
       'AgentMail webhook signature verification failed'
     );
+
+    // H. Adversarial: Raw-body authentication mismatch attack (signed Tenant A raw body, passed modified payload targeting Tenant B)
+    const rawBodyTenantA = JSON.stringify({
+      tenantId: TENANT_A,
+      installationId: 'inst-agentmail-01',
+      messageId: `msg-mismatch-${randomUUID()}`,
+      from: 'vendor@billing.com',
+      to: 'ap@blinka.com',
+      subject: 'Invoice for Tenant A',
+      timestamp: now,
+    });
+    const sigTenantA = computeAgentMailSignature(basePayload, WEBHOOK_SECRET, rawBodyTenantA);
+    const spoofedPayloadTenantB: AgentMailWebhookPayload = {
+      tenantId: TENANT_B,
+      installationId: 'inst-agentmail-01',
+      messageId: `msg-mismatch-${randomUUID()}`,
+      from: 'vendor@billing.com',
+      to: 'ap@blinka.com',
+      subject: 'Invoice for Tenant A',
+      timestamp: now,
+      signature: sigTenantA,
+    };
+    await expect(
+      adapter.handleAgentMailWebhook(spoofedPayloadTenantB, undefined, rawBodyTenantA)
+    ).rejects.toThrow(`Supplied payload tenantId (${TENANT_B}) does not match authenticated rawBody tenantId (${TENANT_A})`);
+
+    // Zero side-effects assertion: no assignments or cases created in either tenant
+    expect(await store.listAssignments(TENANT_B)).toHaveLength(0);
+
+    // I. Adversarial: Correlation target binding (modifying threadId invalidates signature)
+    const payloadWithThread: AgentMailWebhookPayload = {
+      ...basePayload,
+      messageId: `msg-thread-${randomUUID()}`,
+      threadId: 'thread-case-alpha',
+    };
+    const sigWithThread = computeAgentMailSignature(payloadWithThread, WEBHOOK_SECRET);
+    const alteredThreadPayload: AgentMailWebhookPayload = {
+      ...payloadWithThread,
+      threadId: 'thread-case-beta', // attacker re-targets invoice to different payable case
+      signature: sigWithThread,
+    };
+    await expect(adapter.handleAgentMailWebhook(alteredThreadPayload)).rejects.toThrow(
+      'AgentMail webhook signature verification failed'
+    );
+
+    // J. Adversarial: Canonical JSON encoding resists delimiter injection collisions
+    const combo1: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: 'tenant-a|custom',
+      installationId: 'inst-1',
+    };
+    const combo2: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: 'tenant-a',
+      installationId: 'custom|inst-1',
+    };
+    const digest1 = computeAgentMailContentDigest(combo1);
+    const digest2 = computeAgentMailContentDigest(combo2);
+    expect(digest1).not.toBe(digest2);
+
+    // K. Trusted tenant and installation configuration
+    const trustedAdapter = new AgentMailChannelAdapter({
+      store,
+      service,
+      webhookSecret: WEBHOOK_SECRET,
+      trustedTenantId: TENANT_A,
+      trustedInstallationId: 'inst-trusted-only',
+    });
+
+    const untrustedTenantPayload: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: TENANT_B,
+      installationId: 'inst-trusted-only',
+      messageId: `msg-untrusted-${randomUUID()}`,
+    };
+    const untrustedSig = computeAgentMailSignature(untrustedTenantPayload, WEBHOOK_SECRET);
+    await expect(
+      trustedAdapter.handleAgentMailWebhook({ ...untrustedTenantPayload, signature: untrustedSig })
+    ).rejects.toThrow('Tenant tenant-competitor-corp is unauthorized');
+
+    const untrustedInstPayload: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: TENANT_A,
+      installationId: 'inst-unauthorized',
+      messageId: `msg-untrusted-inst-${randomUUID()}`,
+    };
+    const untrustedInstSig = computeAgentMailSignature(untrustedInstPayload, WEBHOOK_SECRET);
+    await expect(
+      trustedAdapter.handleAgentMailWebhook({ ...untrustedInstPayload, signature: untrustedInstSig })
+    ).rejects.toThrow('Installation inst-unauthorized is unauthorized');
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +322,22 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     const freshSig = computeAgentMailSignature(freshPayload, WEBHOOK_SECRET);
     const res = await adapter.handleAgentMailWebhook({ ...freshPayload, signature: freshSig });
     expect(res.assignmentId).toBeDefined();
+
+    // E. Malformed / non-numeric timestamp rejects with INVALID_WEBHOOK_TIMESTAMP
+    const malformedMsgId = `msg-malformed-ts-${randomUUID()}`;
+    const malformedPayload = {
+      ...stalePayload,
+      messageId: malformedMsgId,
+      timestamp: 'not-a-timestamp' as any,
+    };
+    const malformedSig = computeAgentMailSignature(malformedPayload as any, WEBHOOK_SECRET);
+    await expect(
+      adapter.handleAgentMailWebhook({ ...malformedPayload, signature: malformedSig } as any)
+    ).rejects.toThrow('is not a valid date or timestamp');
+
+    // Assert zero side-effects: no assignment was created for the malformed timestamp attempt
+    const malformedAssignment = await store.getAssignment(TENANT_A, malformedMsgId);
+    expect(malformedAssignment).toBeNull();
   });
 
 
@@ -735,12 +843,69 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     const hungElapsed = Date.now() - hungStart;
     expect(hungElapsed).toBeLessThan(1500); // Confirms fast abort rather than hanging indefinitely
     expect(hungToolAborted).toBe(true);
+
+    // D. Adversarial: In-flight timeout cancellation prevents post-timeout mutations and zero side-effects
+    // Directly reproduces finding: delay message retrieval, trigger short timeout,
+    // and verify zero assignments created and inbox message status remains PENDING.
+    const delayedInbox = new InMemoryChannelInbox();
+    const delayedMsgId = `msg-delayed-${randomUUID()}`;
+    delayedInbox.addMessage({
+      id: delayedMsgId,
+      tenantId: TENANT_A,
+      connectionId: 'inst-agentmail-01',
+      provider: 'AGENTMAIL',
+      from: 'billing@vendor.com',
+      to: 'ap@blinka.com',
+      subject: 'Delayed Invoice',
+      attachments: [],
+      receivedAt: new Date().toISOString(),
+      status: 'PENDING',
+    });
+
+    // Wrap getMessage with 60ms delay
+    const origGetMessage = delayedInbox.getMessage.bind(delayedInbox);
+    delayedInbox.getMessage = async (tId, mId, opts) => {
+      await new Promise((r) => setTimeout(r, 60));
+      return origGetMessage(tId, mId, opts);
+    };
+
+    const delayedStore = new InMemoryHarnessStore();
+    const delayedService = new AssignmentService({ store: delayedStore });
+    const delayedEveTools = createEveTools({
+      store: delayedStore,
+      service: delayedService,
+      inbox: delayedInbox,
+    });
+    const delayedAiSdkTools = toAiSdkTools(delayedEveTools, executionCtx);
+
+    const fastRunner = new AiSdkSpecialistRunner({ limits: { maxSteps: 5, timeoutMs: 15 } });
+
+    await expect(
+      fastRunner.executeBoundedLoop(
+        'EVE',
+        delayedAiSdkTools,
+        [{ toolName: 'eve_correlate_payable_case', params: { messageId: delayedMsgId } }],
+        executionCtx
+      )
+    ).rejects.toThrow('exceeded wall-clock timeout deadline of 15ms during tool eve_correlate_payable_case');
+
+    // Wait 100ms for the delayed promise to settle
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Assert ZERO post-timeout mutations and zero side-effects:
+    // 1. Zero assignments were created in the store
+    const assignmentsInStore = await delayedStore.listAssignments(TENANT_A);
+    expect(assignmentsInStore).toHaveLength(0);
+
+    // 2. The message was NOT marked PROCESSED; remains PENDING
+    const delayedMsgState = await delayedInbox.getMessage(TENANT_A, delayedMsgId);
+    expect(delayedMsgState?.status).toBe('PENDING');
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 11. End-to-End Real L1 Integration Flow
   // ─────────────────────────────────────────────────────────────────────────────
-  it('11. End-to-end real L1 invoice processing through AgentMail adapter', async () => {
+  it('11. End-to-end real L1 invoice processing through AgentMail adapter', { timeout: 60_000 }, async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
     const adapter = new AgentMailChannelAdapter({

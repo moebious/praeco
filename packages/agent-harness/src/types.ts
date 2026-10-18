@@ -233,7 +233,8 @@ export interface LinkingChallenge {
 export interface AssignmentPort {
   createOrLoad(
     input: InboundMessageCommand,
-    principal: TrustedPrincipal
+    principal: TrustedPrincipal,
+    options?: { signal?: AbortSignal }
   ): Promise<{ assignment: Assignment; isDuplicate: boolean }>;
 
   claimRun(

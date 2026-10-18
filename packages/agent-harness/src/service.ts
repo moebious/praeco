@@ -41,8 +41,13 @@ export class AssignmentService implements AssignmentPort {
 
   async createOrLoad(
     input: InboundMessageCommand,
-    principal: TrustedPrincipal
+    principal: TrustedPrincipal,
+    options?: { signal?: AbortSignal }
   ): Promise<{ assignment: Assignment; isDuplicate: boolean }> {
+    if (options?.signal?.aborted) {
+      throw new HarnessError('EXECUTION_ABORTED', 'createOrLoad was aborted by cancellation signal');
+    }
+
     const tenantId = principal.tenantId;
 
     // 1. Verify computed payload digest matches asserted digest if provided
@@ -61,6 +66,10 @@ export class AssignmentService implements AssignmentPort {
       input.installationId,
       input.providerEventId
     );
+
+    if (options?.signal?.aborted) {
+      throw new HarnessError('EXECUTION_ABORTED', 'createOrLoad was aborted after checking inbound receipt');
+    }
 
     if (existingReceipt) {
       // If same event ID arrives with different payload, fail closed immediately
@@ -180,6 +189,10 @@ export class AssignmentService implements AssignmentPort {
     };
 
     // 5. Transactional persistence covering inbound claiming, case/assignment, receipts and outbox
+    if (options?.signal?.aborted) {
+      throw new HarnessError('EXECUTION_ABORTED', 'createOrLoad was aborted before saving assignment');
+    }
+
     return this.store.createInboundAssignment({
       receipt,
       commandReceipt,
