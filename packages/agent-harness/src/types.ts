@@ -142,6 +142,7 @@ export interface ExecutionEvent {
 }
 
 export interface FinancialIntentReference {
+  tenantId: TenantId;
   intentId: string;
   assignmentId: AssignmentId;
   caseId: PayableCaseId;
@@ -178,6 +179,8 @@ export interface OutboxEvent {
   commandId: string;
   payload: Record<string, unknown>;
   occurredAt: string;
+  claimedAt?: string;
+  claimExpiresAt?: string;
   dispatchedAt?: string;
 }
 

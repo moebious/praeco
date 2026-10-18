@@ -95,6 +95,12 @@ export class HarnessReconciler {
     // 1. Duty 1: Outbox Draining
     const drainedL3Events = await this.store.drainOutbox(targetTenantId);
     drainedOutboxCount += drainedL3Events.length;
+    if (drainedL3Events.length > 0) {
+      await this.store.acknowledgeOutbox(
+        targetTenantId,
+        drainedL3Events.map((e) => e.eventId)
+      );
+    }
 
     if (this.onL2OutboxDrain) {
       try {

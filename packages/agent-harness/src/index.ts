@@ -19,4 +19,5 @@ export * from './adapters/telegram-channel-adapter.js';
 export * from './adapters/web-channel-adapter.js';
 export * from './channel-notification-service.js';
 export * from './reconciler.js';
+export * from './sql-store.js';
 

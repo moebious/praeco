@@ -155,12 +155,7 @@ export class WebChannelAdapter {
     }
 
     // Gather assignments for this case
-    const assignments: Assignment[] = [];
-    for (const a of (this.store as any).assignments?.values?.() ?? []) {
-      if (a.tenantId === principal.tenantId && a.caseId === caseId) {
-        assignments.push(a);
-      }
-    }
+    const assignments = await this.store.findAssignmentsByCase(principal.tenantId, caseId);
 
     // Gather checkpoints and decisions
     const checkpoints: Checkpoint[] = [];
