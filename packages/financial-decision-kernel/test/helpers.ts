@@ -73,6 +73,7 @@ export function createTestFinancialContext(overrides?: Partial<TrustedFinancialC
       limitUsd: '5000.00',
       committedUsd: '0.00',
       revision: 1,
+      limitRevision: 1,
     },
   ];
 

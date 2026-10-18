@@ -147,7 +147,7 @@ export class FinancialAuthorizationService {
           obligationId: `ob-${randomUUID()}`,
           tenantId: actor.tenantId,
           canonicalKey,
-          intentDigestSha256: evalResult.financialContextDigest,
+          intentDigestSha256: evalResult.intentDigestSha256,
           status: 'COMMITTED',
           committedUsd: unroundedUsd.toString(),
           authorizedAt: occurredAt,
@@ -181,11 +181,11 @@ export class FinancialAuthorizationService {
           tenantId: actor.tenantId,
           payableCaseId: command.proposal.payableCaseId,
           canonicalPayableKey: canonicalKey,
-          intentDigestSha256: evalResult.financialContextDigest,
+          intentDigestSha256: evalResult.intentDigestSha256,
           envelopeIds: command.proposal.envelopeIds,
           unroundedUsd: unroundedUsd.toString(),
           budgetId: budget?.budgetId ?? 'UNKNOWN',
-          budgetLimitRevision: budget?.revision ?? 1,
+          budgetLimitRevision: budget?.limitRevision ?? 1,
           originatingWorkerGrantRef: command.agentGrantRef,
           policyRevisionId: evalResult.policyRevisionId,
           status: 'PENDING',
@@ -287,6 +287,7 @@ export class FinancialAuthorizationService {
           explanation: 'Pago rechazado por el administrador financiero (FinanceAdmin).',
           gateChecks: [],
           financialContextDigest: digest({ rejectedApprovalRequestId: request.approvalRequestId }),
+        intentDigestSha256: '',
           policyRevisionId: this.store.policy.policyRevisionId,
           grantRevisionId: 'grant-human-override',
           decisionId,
@@ -352,13 +353,13 @@ export class FinancialAuthorizationService {
       if (!budget || budget.budgetId !== request.budgetId) {
         throw new Error('APPROVAL_STALE: Budget identity or structure changed');
       }
-      if (budget.revision < request.budgetLimitRevision) {
+      if (budget.limitRevision !== request.budgetLimitRevision) {
         throw new Error('APPROVAL_STALE: Budget limit revision changed');
       }
       if (request.policyRevisionId && freshEval.policyRevisionId !== request.policyRevisionId) {
         throw new Error('APPROVAL_STALE: Company policy revision changed since approval request was created');
       }
-      if (freshEval.financialContextDigest !== request.intentDigestSha256) {
+      if (freshEval.intentDigestSha256 !== request.intentDigestSha256) {
         throw new Error('APPROVAL_STALE: Invoice intent or commercial terms changed since approval request was created');
       }
 
@@ -407,6 +408,7 @@ export class FinancialAuthorizationService {
             : c
         ),
         financialContextDigest: freshEval.financialContextDigest,
+        intentDigestSha256: freshEval.intentDigestSha256,
         policyRevisionId: this.store.policy.policyRevisionId,
         grantRevisionId: workerGrant?.grantRevisionId ?? 'human-approved',
         decisionId,

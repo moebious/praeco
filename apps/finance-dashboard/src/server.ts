@@ -189,6 +189,9 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
             const octBudget = store.budgets.get('BUDGET-2026-10');
             if (octBudget) {
               octBudget.limitUsd = state.rules.budgetUsd;
+              // Structural change to the limit entry: approvals must be
+              // re-grounded against the new budget envelope.
+              octBudget.limitRevision += 1;
             }
           }
 

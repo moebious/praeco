@@ -40,6 +40,7 @@ export function evaluatePayable(
       explanation: resolvedClaim.explanation,
       gateChecks: [failedCheck],
       financialContextDigest: digest({ tenantId: context.tenantId }),
+      intentDigestSha256: '',
       policyRevisionId: context.policy.policyRevisionId,
       grantRevisionId: context.workerGrant.grantRevisionId,
     };
@@ -58,6 +59,7 @@ export function evaluatePayable(
       explanation: checkG1.explanation,
       gateChecks: [checkG1],
       financialContextDigest: digest({ tenantId: context.tenantId }),
+      intentDigestSha256: '',
       policyRevisionId: context.policy.policyRevisionId,
       grantRevisionId: context.workerGrant.grantRevisionId,
     };
@@ -166,6 +168,7 @@ export function evaluatePayable(
     explanation,
     gateChecks: allChecks,
     financialContextDigest: contextDigest,
+    intentDigestSha256: intentDigest,
     policyRevisionId: context.policy.policyRevisionId,
     grantRevisionId: context.workerGrant.grantRevisionId,
   };
