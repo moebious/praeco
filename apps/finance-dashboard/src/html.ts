@@ -257,7 +257,7 @@ export function renderDashboardHtml(): string {
       btn.disabled = true;
       btn.innerHTML = '<span class="animate-spin mr-1">↻</span> Evaluando 8 casos...';
       try {
-        const res = await fetch('/api/run-all', { method: 'POST' });
+        const res = await fetch('/api/run-all', { method: 'POST', headers: adminHeaders() });
         const data = await res.json();
         currentDecisions = data.decisions;
         currentRules.spentUsd = data.spentUsd;
@@ -513,8 +513,19 @@ export function renderDashboardHtml(): string {
       }
     }
 
-    // Auto-fetch rules and execute on load
-    fetchRules().then(() => resetAndRunAll());
+    // Restore the saved admin token, persist edits, and auto-run only when a
+    // token is present (run-all requires authentication like every other
+    // mutating endpoint).
+    const adminTokenInput = document.getElementById('admin-token');
+    adminTokenInput.value = localStorage.getItem('praeco-dashboard-token') || '';
+    adminTokenInput.addEventListener('input', () => {
+      localStorage.setItem('praeco-dashboard-token', adminTokenInput.value.trim());
+    });
+    fetchRules().then(() => {
+      if ((adminTokenInput.value || '').trim()) {
+        resetAndRunAll();
+      }
+    });
   </script>
 </body>
 </html>`;

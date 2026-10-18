@@ -171,6 +171,12 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/run-all') {
+      // run-all clears active sessions and records simulated decisions: treat
+      // it like every other mutating endpoint and require the admin token.
+      if (!hasValidToken(req)) {
+        sendJson(res, 403, { error: 'DASHBOARD_TOKEN_REQUIRED: set the x-praeco-token header (token is printed at server startup)' });
+        return;
+      }
       try {
         const scenarios = buildScenarios();
         state.activeServices.clear();
