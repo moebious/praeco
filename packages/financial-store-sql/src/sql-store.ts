@@ -13,6 +13,7 @@ export interface BudgetSeed {
 export interface CommitPayableCommand {
   tenantId: string;
   decisionId: string;
+  commitmentId: string;
   /** Canonical payable key: tenant + vendor tax ID + invoice number. */
   canonicalKey: string;
   intentDigestSha256: string;
@@ -30,15 +31,16 @@ export type CommitPayableResult =
   | { status: 'COMMITTED'; decisionId: string; remainingUsd: string }
   | { status: 'IDEMPOTENT_REPLAY'; decisionId: string }
   | { status: 'DUPLICATE_OBLIGATION'; canonicalKey: string }
+  | { status: 'CONFLICTING_OBLIGATION'; canonicalKey: string }
   | { status: 'INSUFFICIENT_BUDGET'; availableUsd: string };
 
 /**
  * SQL-backed authoritative store for the ADR-003 financial transaction
- * boundary. The commit path is one database transaction: idempotency check,
- * budget row lock (SELECT ... FOR UPDATE), obligation claim (unique canonical
- * key), atomic budget debit, decision record, idempotency receipt and ledger
- * event. Concurrent payables serialize on the budget row; a duplicate payable
- * rolls back with zero budget movement.
+ * boundary. The commit path is one database transaction: idempotency
+ * serialization/check, obligation claim (unique canonical key), budget row
+ * lock (SELECT ... FOR UPDATE), atomic budget debit, decision record,
+ * idempotency receipt and ledger event. Concurrent payables serialize on the
+ * budget row; a duplicate payable rolls back with zero budget movement.
  */
 export class SqlFinancialStore {
   private constructor(private readonly pool: Pool) {}
@@ -74,11 +76,32 @@ export class SqlFinancialStore {
     return result.rows[0]!.committed_usd as string;
   }
 
+  /** Returns the persisted decision record for idempotent replay, or null. */
+  public async getDecisionRecord(decisionId: string): Promise<unknown | null> {
+    const result = await this.pool.query(
+      `SELECT record FROM decisions WHERE decision_id = $1`,
+      [decisionId]
+    );
+    if (!result.rowCount || result.rowCount === 0) {
+      return null;
+    }
+    const raw = result.rows[0]!.record;
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  }
+
   public async commitPayable(command: CommitPayableCommand): Promise<CommitPayableResult> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       try {
+        // Serialize concurrent retries before checking the receipt. The
+        // two-key advisory lock is transaction-scoped, and hash collisions
+        // only add harmless contention.
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+          [command.tenantId, command.idempotencyKey]
+        );
+
         // 1. Idempotency first, scoped to tenant + key (ADR-003).
         const receipt = await client.query(
           `SELECT payload_digest, decision_id FROM idempotency_receipts
@@ -94,7 +117,43 @@ export class SqlFinancialStore {
           return { status: 'IDEMPOTENT_REPLAY', decisionId: row.decision_id as string };
         }
 
-        // 2. Lock the budget row for the whole transaction; exact decimals in SQL.
+        // 2. Claim the obligation before checking budget so duplicate/conflict
+        // gate precedence remains deterministic even when funds are exhausted.
+        // A failed budget check rolls this claim back with the transaction.
+        const obligation = await client.query(
+          `INSERT INTO obligations
+             (tenant_id, canonical_key, obligation_id, intent_digest_sha256, committed_usd, authorized_at)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6)
+           ON CONFLICT (tenant_id, canonical_key) DO NOTHING
+           RETURNING obligation_id`,
+          [
+            command.tenantId,
+            command.canonicalKey,
+            `ob-${randomUUID()}`,
+            command.intentDigestSha256,
+            command.amountUsd,
+            command.occurredAt,
+          ]
+        );
+        if (!obligation.rowCount || obligation.rowCount === 0) {
+          const prior = await client.query(
+            `SELECT intent_digest_sha256 FROM obligations
+             WHERE tenant_id = $1 AND canonical_key = $2`,
+            [command.tenantId, command.canonicalKey]
+          );
+          if (!prior.rowCount || prior.rowCount === 0) {
+            throw new Error('OBLIGATION_CONFLICT_ROW_NOT_FOUND');
+          }
+          const status =
+            prior.rows[0]!.intent_digest_sha256 === command.intentDigestSha256
+              ? 'DUPLICATE_OBLIGATION'
+              : 'CONFLICTING_OBLIGATION';
+          await client.query('ROLLBACK');
+          return { status, canonicalKey: command.canonicalKey };
+        }
+
+        // 3. Lock and check the budget in the same transaction. Exact decimal
+        // comparisons happen inside PostgreSQL.
         const budget = await client.query(
           `SELECT (limit_usd - committed_usd)::text AS available_usd
            FROM budgets WHERE tenant_id = $1 AND budget_id = $2 FOR UPDATE`,
@@ -113,28 +172,6 @@ export class SqlFinancialStore {
           return { status: 'INSUFFICIENT_BUDGET', availableUsd };
         }
 
-        // 3. Claim the obligation (unique canonical key) BEFORE debiting: the
-        // race loser rolls back with zero budget movement.
-        const obligation = await client.query(
-          `INSERT INTO obligations
-             (tenant_id, canonical_key, obligation_id, intent_digest_sha256, committed_usd, authorized_at)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6)
-           ON CONFLICT (tenant_id, canonical_key) DO NOTHING
-           RETURNING obligation_id`,
-          [
-            command.tenantId,
-            command.canonicalKey,
-            `ob-${randomUUID()}`,
-            command.intentDigestSha256,
-            command.amountUsd,
-            command.occurredAt,
-          ]
-        );
-        if (!obligation.rowCount || obligation.rowCount === 0) {
-          await client.query('ROLLBACK');
-          return { status: 'DUPLICATE_OBLIGATION', canonicalKey: command.canonicalKey };
-        }
-
         // 4. Atomic debit in the same transaction as the obligation claim.
         await client.query(
           `UPDATE budgets
@@ -143,7 +180,21 @@ export class SqlFinancialStore {
           [command.amountUsd, command.tenantId, command.budgetId]
         );
 
-        // 5. Decision, receipt, and ledger event share the same commit.
+        // 5. Commitment, decision, receipt, and ledger event share one commit.
+        await client.query(
+          `INSERT INTO commitments
+             (tenant_id, commitment_id, canonical_payable_key, budget_id, unrounded_usd, decision_id, committed_at)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6, $7)`,
+          [
+            command.tenantId,
+            command.commitmentId,
+            command.canonicalKey,
+            command.budgetId,
+            command.amountUsd,
+            command.decisionId,
+            command.occurredAt,
+          ]
+        );
         await client.query(
           `INSERT INTO decisions (decision_id, tenant_id, outcome, occurred_at, record)
            VALUES ($1, $2, $3, $4, $5::jsonb)`,

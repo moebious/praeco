@@ -11,4 +11,6 @@ export * from './scenarios.js';
 export * from './service.js';
 export * from './l1-adapter.js';
 // Exported for the apps/finance-dashboard scenario runner; the kernel itself carries no UI.
-export { buildScenarios } from './cli.js';
+export { buildScenarios, runGoldenDemo } from './cli.js';
+export type { GoldenDemoOptions, GoldenDemoSummary, ScenarioDef } from './cli.js';
+export type { AuthoritativeCommitCommand, AuthoritativeCommitPort, AuthoritativeCommitResult } from './commit-port.js';

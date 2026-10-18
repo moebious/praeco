@@ -6,7 +6,7 @@
   "workspaces": ["packages/*", "apps/*"],
   "engines": { "node": ">=22.12.0" },
   "scripts": {
-    "build": "npm run build --workspace @praeco/evidence-intelligence && npm run build --workspace @praeco/document-classification-adapter && npm run build --workspace @praeco/financial-decision-kernel && npm run build --workspace @praeco/external-document-intake && npm run build --workspace @praeco/agent-harness",
+    "build": "npm run build --workspace @praeco/evidence-intelligence && npm run build --workspace @praeco/document-classification-adapter && npm run build --workspace @praeco/financial-decision-kernel && npm run build --workspace @praeco/financial-store-sql && npm run build --workspace @praeco/external-document-intake && npm run build --workspace @praeco/agent-harness",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:l1": "npm run test --workspace @praeco/evidence-intelligence",

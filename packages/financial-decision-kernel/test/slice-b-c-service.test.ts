@@ -5,6 +5,8 @@ import {
   DEMO_TENANT_ID,
   type EnvelopeResolver,
   type ReadyInvoiceEnvelope,
+  type AuthoritativeCommitPort,
+  type FinancialDecisionRecord,
   type TrustedActorContext,
 } from '../src/index.js';
 import { createSyntheticEnvelope } from './helpers.js';
@@ -79,6 +81,98 @@ describe('L2 Slices B & C — Transactional Store, Commit, and Concurrency', () 
     // Verify ledger event
     expect(store.ledgerEvents).toHaveLength(1);
     expect(store.ledgerEvents[0]?.eventType).toBe('SIMULATED_AUTHORIZATION_COMMITTED');
+  });
+
+  it('blocks an authoritative same-key claim with a conflicting intent as G2_CONFLICT', async () => {
+    const store = createScenarioStore('BLINKA-01');
+    const resolver = new InMemoryEnvelopeResolver();
+    const envelope = createSyntheticEnvelope({
+      tenantId: DEMO_TENANT_ID,
+      envelopeId: 'env-conflicting-intent',
+      invoiceNumber: 'BOG-2026-10',
+      taxId: 'CO-900.123.456-7',
+      amount: '2200.00',
+      currency: 'USD',
+    });
+    resolver.register(envelope);
+    const commitPort: AuthoritativeCommitPort = {
+      async commitAuthorizedPayable(command) {
+        return {
+          status: 'CONFLICTING_OBLIGATION',
+          canonicalKey: command.canonicalKey,
+          budgetCommittedUsd: '0.00',
+        };
+      },
+    };
+    const service = new FinancialAuthorizationService(store, resolver, undefined, commitPort);
+
+    const record = await service.decideAndCommit(
+      {
+        proposal: { payableCaseId: 'case-conflict', envelopeIds: [envelope.envelopeId] },
+        idempotencyKey: 'idem-conflicting-intent',
+        workerId: 'worker-agent-demo',
+        agentGrantRef: 'grant-synthetic-worker',
+      },
+      actorWorker
+    );
+
+    expect(record.outcome).toBe('BLOCKED');
+    expect(record.gateChecks.find(check => check.gate === 'G2')?.code).toBe('G2_CONFLICT');
+    expect(record.commitmentId).toBeNull();
+  });
+
+  it('mirrors an authoritative idempotent replay into a cold service read store', async () => {
+    const resolver = new InMemoryEnvelopeResolver();
+    const envelope = createSyntheticEnvelope({
+      tenantId: DEMO_TENANT_ID,
+      envelopeId: 'env-authoritative-replay',
+      invoiceNumber: 'BOG-2026-10',
+      taxId: 'CO-900.123.456-7',
+      amount: '2200.00',
+      currency: 'USD',
+    });
+    resolver.register(envelope);
+
+    let persistedRecord: FinancialDecisionRecord | undefined;
+    const commitPort: AuthoritativeCommitPort = {
+      async commitAuthorizedPayable(command) {
+        if (persistedRecord) {
+          return {
+            status: 'IDEMPOTENT_REPLAY',
+            decisionId: persistedRecord.decisionId,
+            decisionRecord: persistedRecord,
+            budgetCommittedUsd: '2200.00',
+          };
+        }
+        persistedRecord = command.decisionRecord;
+        return {
+          status: 'COMMITTED',
+          decisionId: command.decisionId,
+          budgetCommittedUsd: '2200.00',
+        };
+      },
+    };
+    const command = {
+      proposal: { payableCaseId: 'case-authoritative-replay', envelopeIds: [envelope.envelopeId] },
+      idempotencyKey: 'idem-authoritative-replay',
+      workerId: 'worker-agent-demo',
+      agentGrantRef: 'grant-synthetic-worker',
+    };
+    const firstService = new FinancialAuthorizationService(
+      createScenarioStore('BLINKA-01'),
+      resolver,
+      undefined,
+      commitPort
+    );
+    const first = await firstService.decideAndCommit(command, actorWorker);
+
+    const coldStore = createScenarioStore('BLINKA-01');
+    const coldService = new FinancialAuthorizationService(coldStore, resolver, undefined, commitPort);
+    const replayed = await coldService.decideAndCommit(command, actorWorker);
+
+    expect(replayed.decisionId).toBe(first.decisionId);
+    expect(coldStore.decisions.get(first.decisionId)).toEqual(first);
+    expect(coldStore.receipts.get(command.idempotencyKey)?.decisionId).toBe(first.decisionId);
   });
 
   it('Idempotency: exact same command returns identical record without double-spending', async () => {
