@@ -1,0 +1,4 @@
+SYNTHETIC INCOMPLETE DOCUMENT - NO REAL COMPANY
+Invoice number: DEG-2026-10
+Total due: 100.00
+Notes: missing beneficiary, tax id, currency and dates on purpose.

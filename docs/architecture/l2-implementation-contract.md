@@ -121,7 +121,7 @@ Names may vary, but preserve foreign keys, tenant isolation, unique constraints,
 
 **Slice C — Atomic authorize:** decide-and-commit transaction with payable unique key, row protection/conditional budget updates, idempotent command record, append-only ledger and tests for retries plus parallel spending. No demo UI until this is correct.
 
-**Slice D — Human approvals:** authenticated FinanceAdmin, 24h expiry, no pending hold, single-use bound approval, fresh full six-gate evaluation and current-budget commit; rejection/revocation/races.
+**Slice D — Human approvals:** authenticated FinanceAdmin, 24h expiry, no pending hold, single-use bound approval, fresh full six-gate evaluation and current-budget commit; rejection/revocation/races. A late APPROVE whose fresh re-evaluation hard-fails, or whose authoritative commit is blocked by a concurrent claim or budget exhaustion, closes the request in the terminal lifecycle state `APPROVAL_BLOCKED` (a lifecycle state, not a fourth verdict): the immutable resolution decision is `BLOCKED`, an idempotency receipt is written so the same key replays the same decision, and any other key fails closed with `APPROVAL_ALREADY_RESOLVED`. A blocked approval is never retryable through a second human action.
 
 **Slice E — Integration and audit:** trusted `reader.loadReady()`; deterministic gate trace and historical replay; output models consumable by L3/UI without secrets; integration tests for all eight fixtures.
 

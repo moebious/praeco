@@ -1,0 +1,305 @@
+{
+  "captured_on": "2026-10-18",
+  "purpose": "Engineering-only provenance and reproducibility snapshot; exclude this file from product bundles.",
+  "source_local_root": "/Users/moebious/Work/praeco-references/ai-teammates",
+  "source_repository": "https://github.com/code-with-antonio/ai-teammates",
+  "source_head": "de32f461cc9e0ddf4c5087af07c65cf06df7d683",
+  "source_is_clean": false,
+  "scope": "Selected configuration, application and integration files only. No environment files, credentials, database contents or source code are embedded.",
+  "license_status": "No license identified in the inspected snapshot; redistribution permission not established.",
+  "versions_source": "Local package-lock.json; observed, not asserted latest or already compatible with Praeco.",
+  "resolved_versions": {
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "5.9.3",
+    "tailwindcss": "4.3.3",
+    "@tailwindcss/postcss": "4.3.3",
+    "@clerk/nextjs": "7.9.9",
+    "@clerk/ui": "1.38.0",
+    "@base-ui/react": "1.8.0",
+    "shadcn": "4.21.0",
+    "ai": "7.0.127",
+    "@ai-sdk/react": "4.0.130",
+    "@openrouter/ai-sdk-provider": "3.1.0",
+    "@trigger.dev/sdk": "4.7.3",
+    "@trigger.dev/build": "4.7.3",
+    "@daytona/sdk": "0.222.0",
+    "drizzle-orm": "0.45.3",
+    "drizzle-kit": "0.31.11",
+    "pg": "8.23.1",
+    "zod": "4.6.5",
+    "react-hook-form": "7.89.0",
+    "@hookform/resolvers": "5.9.1",
+    "@novnc/novnc": "1.7.0",
+    "lucide-react": "1.49.0",
+    "streamdown": "2.7.0",
+    "next-themes": "0.4.6",
+    "react-resizable-panels": "4.14.1",
+    "@dicebear/core": "10.7.0",
+    "@dicebear/styles": "10.6.0",
+    "eslint": "10.11.0",
+    "eslint-config-next": "16.3.4"
+  },
+  "files": [
+    {
+      "path": "package.json",
+      "local_sha256": "ce8175cba6389d356e8090b62763172e4986eba67b547dc4a7dab577c7c0274d",
+      "upstream_sha256": "8d4061c14532fb9164e0728c39f3977f120dd01cbdd6e3fbb1a1a65d4e9983bb",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "package-lock.json",
+      "local_sha256": "42ea57813a888adaa60b315836b86817835aba68ea09d82a71a92fb605fbd047",
+      "upstream_sha256": "a63ceddc61bebf6894b417d8720a0b2b06606277bdf80390938c8d699d87a0b5",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components.json",
+      "local_sha256": "9928283696d86836422959a2c520df83a718d31ffbcab533a14ca8dca2c8d475",
+      "upstream_sha256": "9928283696d86836422959a2c520df83a718d31ffbcab533a14ca8dca2c8d475",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "tsconfig.json",
+      "local_sha256": "f15e865bb05a19cc9c29f72da1754d25f091ed7efc361589a4821a846f652e8f",
+      "upstream_sha256": "f15e865bb05a19cc9c29f72da1754d25f091ed7efc361589a4821a846f652e8f",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "next.config.ts",
+      "local_sha256": "5432958a01bcf7cc61e7a0f80467b1853d0038174efa92031cc1719c55f4b646",
+      "upstream_sha256": "5432958a01bcf7cc61e7a0f80467b1853d0038174efa92031cc1719c55f4b646",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "trigger.config.ts",
+      "local_sha256": "c5870e0d78c2d8382bd413df45432d2900777271870e2cdfd7d0b1a543f92aaa",
+      "upstream_sha256": "c5870e0d78c2d8382bd413df45432d2900777271870e2cdfd7d0b1a543f92aaa",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "drizzle.config.ts",
+      "local_sha256": "c60f90fef1829796b5e3895729f46d971040aac3db3894fcf0742c3484602dec",
+      "upstream_sha256": "c60f90fef1829796b5e3895729f46d971040aac3db3894fcf0742c3484602dec",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "proxy.ts",
+      "local_sha256": "984da7c553a026ca4ee7d856c3a1b4afb7b7cea169e322f873b87dee107b44a9",
+      "upstream_sha256": "beb44d945791bc6ff502c9a0d77f5f182207848617d76eacf0001e358d29ee30",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "app/layout.tsx",
+      "local_sha256": "0008ed4e810da89d2b3a3f9929141dad68016e440e270a0abc89838bd546e27d",
+      "upstream_sha256": "0008ed4e810da89d2b3a3f9929141dad68016e440e270a0abc89838bd546e27d",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "app/globals.css",
+      "local_sha256": "ad6bb0e8e7eb3671564737083d0cb61185fe263e3cbef4af9b699d34ccec4a06",
+      "upstream_sha256": "ad6bb0e8e7eb3671564737083d0cb61185fe263e3cbef4af9b699d34ccec4a06",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "app/(dashboard)/layout.tsx",
+      "local_sha256": "462bda0605f55aea3a160ebf9e9e2fbb9ff58fde168b65b92c471ba61095ff4a",
+      "upstream_sha256": "462bda0605f55aea3a160ebf9e9e2fbb9ff58fde168b65b92c471ba61095ff4a",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "app/(dashboard)/page.tsx",
+      "local_sha256": "f2f088cba377aff7b67a5ef8e71b5848642732ae391534844d0ac141bf7679c2",
+      "upstream_sha256": "f2f088cba377aff7b67a5ef8e71b5848642732ae391534844d0ac141bf7679c2",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "app/(dashboard)/chats/[chatId]/page.tsx",
+      "local_sha256": "37ae79ce8d4d7f3f53eea7b0f030d093fa8a3dd4ff76327fd6204643dc652191",
+      "upstream_sha256": "37ae79ce8d4d7f3f53eea7b0f030d093fa8a3dd4ff76327fd6204643dc652191",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "app/sign-in/[[...sign-in]]/page.tsx",
+      "local_sha256": "ac928e74045046ed8b836c2aa695d0cf05bcd720d31e9197321b43e341e75d9d",
+      "upstream_sha256": "ac928e74045046ed8b836c2aa695d0cf05bcd720d31e9197321b43e341e75d9d",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "app/sign-up/[[...sign-up]]/page.tsx",
+      "local_sha256": "14c81fe7b389666565f6a018adc05bb0ee62f4cb4552c5fbcab6e326534c899b",
+      "upstream_sha256": "14c81fe7b389666565f6a018adc05bb0ee62f4cb4552c5fbcab6e326534c899b",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/app-sidebar.tsx",
+      "local_sha256": "580ea62b219eddb56ba7f1dc776f396bc9baa97248f25f7a924d76928871c411",
+      "upstream_sha256": "580ea62b219eddb56ba7f1dc776f396bc9baa97248f25f7a924d76928871c411",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/chat-header.tsx",
+      "local_sha256": "bf583ecdcf530ceb72a7d4382a337bc85c2da99d716ed67cf1fb9a3fad2be01a",
+      "upstream_sha256": "bf583ecdcf530ceb72a7d4382a337bc85c2da99d716ed67cf1fb9a3fad2be01a",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/chat.tsx",
+      "local_sha256": "6ae87f8f98a4231093f03acee6c1f9bf290614f916f1858729d8521d264b24c6",
+      "upstream_sha256": "6ae87f8f98a4231093f03acee6c1f9bf290614f916f1858729d8521d264b24c6",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/chat-avatar.tsx",
+      "local_sha256": "0883c61b138b31e8db9649455a2388363e7c1fa9141bea0add7f994818fe0865",
+      "upstream_sha256": "0883c61b138b31e8db9649455a2388363e7c1fa9141bea0add7f994818fe0865",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/desktop-panel.tsx",
+      "local_sha256": "126d5117c547e9ae9f0106f3e7412e0e4ca30b24bbe581feacca3acfc7eb0655",
+      "upstream_sha256": "126d5117c547e9ae9f0106f3e7412e0e4ca30b24bbe581feacca3acfc7eb0655",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/theme-provider.tsx",
+      "local_sha256": "d3c592b1bab5f25145e51af21963fd1cbc2779e3de0025688536acfd8295dc61",
+      "upstream_sha256": "d3c592b1bab5f25145e51af21963fd1cbc2779e3de0025688536acfd8295dc61",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/search-command.tsx",
+      "local_sha256": "7df94829fa31f415c89929fae98eb245fd96f1b70e2fe91bf8fcc4d709417373",
+      "upstream_sha256": "7df94829fa31f415c89929fae98eb245fd96f1b70e2fe91bf8fcc4d709417373",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "components/user-menu.tsx",
+      "local_sha256": "04386ac8bfbb7571630505fd4cea175c4068425c11bae965b54448f5eb067e0d",
+      "upstream_sha256": "04386ac8bfbb7571630505fd4cea175c4068425c11bae965b54448f5eb067e0d",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "actions/chat.ts",
+      "local_sha256": "9ed86f4674a555e9b19773857e9c093b8d6fb2a8f82f79359ce89b98ed8bc65c",
+      "upstream_sha256": "3421d19fd25bf0e64e77debe2d16fc974c019e05e625268d673b8645d667556b",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "actions/bot.ts",
+      "local_sha256": "9a5c0bc11f39ab96071bdcc20aaf58d200df1ffe60f449d2fc9dc4bece8b8483",
+      "upstream_sha256": "788887a66760b1b5f47485c175d0b6a30300b5476fb3b42fed06c32c98311cc7",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "queries/chats.ts",
+      "local_sha256": "cb4cf1aacf7c12abdeb6a0df4948c1941ef80bee24c9b3f00a8d32bd3c5722b7",
+      "upstream_sha256": "cb4cf1aacf7c12abdeb6a0df4948c1941ef80bee24c9b3f00a8d32bd3c5722b7",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "queries/bots.ts",
+      "local_sha256": "540c54033ddd21de828df29acf3a33d1aaad53e9f506a71b1d30f647b83c34f8",
+      "upstream_sha256": "540c54033ddd21de828df29acf3a33d1aaad53e9f506a71b1d30f647b83c34f8",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "db/index.ts",
+      "local_sha256": "e3bdf3a9d0f4203624adfa0a3e13d3fdadd13fb0dbfcd829f4e01553aa64f99c",
+      "upstream_sha256": "e3bdf3a9d0f4203624adfa0a3e13d3fdadd13fb0dbfcd829f4e01553aa64f99c",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "db/schema.ts",
+      "local_sha256": "6eabaf481d8a98f43db4fef88be1a46b8261d94ad9daf236d064d92521ec6c3b",
+      "upstream_sha256": "6eabaf481d8a98f43db4fef88be1a46b8261d94ad9daf236d064d92521ec6c3b",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "lib/model.ts",
+      "local_sha256": "dc61b6b8acaf396083515224cdf1cddbf6f90b54aa223527bb888a511955b39a",
+      "upstream_sha256": "9b0488ae036ecc3334fdc845a12dd47c57b9f30236a43fcc880b5201ac0a25c6",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "lib/model.test.ts",
+      "local_sha256": "d46cb4d360c54383466435157d2c5bf6f56c1772b772976558ec02fd76fc9b27",
+      "upstream_sha256": null,
+      "local_state": "untracked",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "lib/daytona.ts",
+      "local_sha256": "97029212d3ce691e2e0eec14ebf7d8d4e87b960724c19184e6448e67e83718a0",
+      "upstream_sha256": "faf2a22f9623d8e82221850491d45a3f407cdedeac5a422907055a71dc7c592a",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "lib/sandbox-tools.ts",
+      "local_sha256": "9f4779070d65bf6804e9fb103f7323f4de748220fd264418adc9829ece65cf41",
+      "upstream_sha256": "9f4779070d65bf6804e9fb103f7323f4de748220fd264418adc9829ece65cf41",
+      "local_state": "unchanged",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "lib/usage.ts",
+      "local_sha256": "2724488e9937b55c1b7695afbb8aa64b8afd147187ffc7e865317a9c9a6aa023",
+      "upstream_sha256": "6ae15430a70e2e97667d8ce9c7e79797cedae7cfc04b9dfc225508961250bc69",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "lib/billing.ts",
+      "local_sha256": "328a162ac05e91f262e6516904b473babe7222d9a7402f2748c1965173b8f50a",
+      "upstream_sha256": "f3391d7be67eff404045dd48645780c706819a24349c5db9ec3b3bb147cf0908",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "lib/billing.test.ts",
+      "local_sha256": "e6076cdbcc1b2558c45a0c137183a363bf97a04c2e06baa0a5ef53c53b3e1abf",
+      "upstream_sha256": null,
+      "local_state": "untracked",
+      "treatment": "inspect only; copying requires documented license or permission"
+    },
+    {
+      "path": "trigger/chat.ts",
+      "local_sha256": "644bc731fc30ac18e42866091af99b511348a671b8a250d2d5169fe8ff7db8ae",
+      "upstream_sha256": "6873fb127ccb0e3980849113dddaafcd13d0c1683dc1b05632933f3fb2999bf3",
+      "local_state": "modified",
+      "treatment": "inspect only; copying requires documented license or permission"
+    }
+  ]
+}

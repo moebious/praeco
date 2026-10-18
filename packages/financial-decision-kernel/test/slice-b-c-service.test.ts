@@ -509,6 +509,176 @@ describe('L2 Slices B & C — Transactional Store, Commit, and Concurrency', () 
       expect(approvalRecord.explanation).toContain('INSUFFICIENT_PERIOD_BUDGET');
     });
 
+    it('closes the approval cycle as APPROVAL_BLOCKED when re-evaluation hard-fails during the wait', async () => {
+      const store = createScenarioStore('BLINKA-03');
+      const resolver = new InMemoryEnvelopeResolver();
+      const service = new FinancialAuthorizationService(store, resolver);
+
+      const env = createSyntheticEnvelope({
+        tenantId: DEMO_TENANT_ID,
+        envelopeId: 'env-mex-03',
+        invoiceNumber: 'MEX-2026-10',
+        taxId: 'MX-DESIGN-AGENCY',
+        amount: '76000.00', // USD 3,800
+        currency: 'MXN',
+      });
+      resolver.register(env);
+
+      const record = await service.decideAndCommit(
+        {
+          proposal: { payableCaseId: 'case-blinka-03', envelopeIds: ['env-mex-03'] },
+          idempotencyKey: 'idem-blocked-cmd',
+          workerId: 'worker-agent-demo',
+          agentGrantRef: 'grant-synthetic-worker',
+        },
+        actorWorker
+      );
+      expect(record.outcome).toBe('PENDING_HUMAN_APPROVAL');
+      const approvalRequestId = record.approvalRequestId!;
+
+      // A late approval is consent, never an override: the budget was
+      // exhausted by other obligations while the request was pending.
+      store.budgets.get('BUDGET-2026-10')!.committedUsd = '4000.00';
+
+      const decisionsBefore = store.decisions.size;
+      const blocked = await service.resolveApproval(
+        {
+          approvalRequestId,
+          idempotencyKey: 'idem-blocked-approve',
+          action: 'APPROVE',
+        },
+        actorCFO
+      );
+
+      // (i) terminal lifecycle state, not a dangling PENDING request
+      const request = store.approvalRequests.get(approvalRequestId)!;
+      expect(blocked.outcome).toBe('BLOCKED');
+      expect(request.status).toBe('APPROVAL_BLOCKED');
+      expect(request.resolvedAt).not.toBeNull();
+      expect(request.resolvedByPrincipalId).toBe(actorCFO.principalId);
+
+      // (ii) resolvedDecisionId points at the immutable BLOCKED decision
+      expect(request.resolvedDecisionId).toBe(blocked.decisionId);
+      expect(request.resolvedDecisionId).not.toBe(request.decisionId);
+
+      // (iii) idempotency receipt + APPROVAL_RESOLVED emitted, exactly one new decision
+      expect(store.receipts.get('idem-blocked-approve')?.decisionId).toBe(blocked.decisionId);
+      expect(
+        store.ledgerEvents.some(
+          e => e.eventType === 'APPROVAL_RESOLVED' && e.payload.decisionId === blocked.decisionId
+        )
+      ).toBe(true);
+      expect(store.decisions.size).toBe(decisionsBefore + 1);
+
+      // (iv) same idempotency key replays the SAME decision
+      const replay = await service.resolveApproval(
+        {
+          approvalRequestId,
+          idempotencyKey: 'idem-blocked-approve',
+          action: 'APPROVE',
+        },
+        actorCFO
+      );
+      expect(replay.decisionId).toBe(blocked.decisionId);
+      expect(store.decisions.size).toBe(decisionsBefore + 1);
+
+      // (v) a different key cannot reprocess a closed request
+      await expect(
+        service.resolveApproval(
+          {
+            approvalRequestId,
+            idempotencyKey: 'idem-blocked-approve-2',
+            action: 'APPROVE',
+          },
+          actorCFO
+        )
+      ).rejects.toThrow(/APPROVAL_ALREADY_RESOLVED/);
+      expect(store.decisions.size).toBe(decisionsBefore + 1);
+    });
+
+    it('closes the approval cycle as APPROVAL_BLOCKED when the authoritative commit is blocked concurrently during the wait', async () => {
+      const store = createScenarioStore('BLINKA-03');
+      const resolver = new InMemoryEnvelopeResolver();
+      const env = createSyntheticEnvelope({
+        tenantId: DEMO_TENANT_ID,
+        envelopeId: 'env-mex-03',
+        invoiceNumber: 'MEX-2026-10',
+        taxId: 'MX-DESIGN-AGENCY',
+        amount: '76000.00',
+        currency: 'MXN',
+      });
+      resolver.register(env);
+
+      let commitCalls = 0;
+      const commitPort: AuthoritativeCommitPort = {
+        async lookupCommandResult() {
+          return null;
+        },
+        async commitAuthorizedPayable() {
+          commitCalls += 1;
+          // A concurrent transaction claimed the obligation during the wait.
+          return {
+            status: 'DUPLICATE_OBLIGATION',
+            canonicalKey: 'tenant/canonical-key',
+            budgetCommittedUsd: '3800.00',
+          };
+        },
+      };
+      const service = new FinancialAuthorizationService(store, resolver, undefined, commitPort);
+
+      const record = await service.decideAndCommit(
+        {
+          proposal: { payableCaseId: 'case-blinka-03', envelopeIds: ['env-mex-03'] },
+          idempotencyKey: 'idem-concurrent-cmd',
+          workerId: 'worker-agent-demo',
+          agentGrantRef: 'grant-synthetic-worker',
+        },
+        actorWorker
+      );
+      const approvalRequestId = record.approvalRequestId!;
+
+      const blocked = await service.resolveApproval(
+        {
+          approvalRequestId,
+          idempotencyKey: 'idem-concurrent-approve',
+          action: 'APPROVE',
+        },
+        actorCFO
+      );
+
+      const request = store.approvalRequests.get(approvalRequestId)!;
+      expect(blocked.outcome).toBe('BLOCKED');
+      expect(request.status).toBe('APPROVAL_BLOCKED');
+      expect(request.resolvedByPrincipalId).toBe(actorCFO.principalId);
+      expect(request.resolvedDecisionId).toBe(blocked.decisionId);
+      expect(store.receipts.get('idem-concurrent-approve')?.decisionId).toBe(blocked.decisionId);
+      expect(commitCalls).toBe(1);
+
+      // Same key replays the recorded decision without re-invoking the port.
+      const replay = await service.resolveApproval(
+        {
+          approvalRequestId,
+          idempotencyKey: 'idem-concurrent-approve',
+          action: 'APPROVE',
+        },
+        actorCFO
+      );
+      expect(replay.decisionId).toBe(blocked.decisionId);
+      expect(commitCalls).toBe(1);
+
+      // A new key fails closed; the closed request is never reprocessed.
+      await expect(
+        service.resolveApproval(
+          {
+            approvalRequestId,
+            idempotencyKey: 'idem-concurrent-approve-2',
+            action: 'APPROVE',
+          },
+          actorCFO
+        )
+      ).rejects.toThrow(/APPROVAL_ALREADY_RESOLVED/);
+    });
+
     it('V-8: fails closed when agentGrantRef is unresolvable', async () => {
       const store = createScenarioStore('BLINKA-01');
       const resolver = new InMemoryEnvelopeResolver();

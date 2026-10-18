@@ -640,4 +640,117 @@ describe('L3 Slice E — Authenticated Human Approval & Durable Reconciler Daemo
     expect(reResumed.assignment.state).toBe('COMPLETED');
     expect(reResumed.outcome).toBe('AUTHORIZED_SIMULATED');
   });
+
+  it('8b. Approval that resolves to BLOCKED during the wait is observed and the stranded Assignment resumes to COMPLETED/BLOCKED', async () => {
+    // DEMO-001: Isolated scenario replay must not share ledgers
+    const harnessStore = new InMemoryHarnessStore();
+    const scenarioStore = createScenarioStore('BLINKA-03');
+    const { service, decisionPort, runner } = createTestEnvironment(harnessStore, scenarioStore);
+
+    const pdfBytes = await readFile(new URL('03.pdf', demoSourcesRoot));
+    const evRef = await evidencePort.ingestSource(
+      {
+        bytes: pdfBytes,
+        channel: 'PDF',
+        mimeType: 'application/pdf',
+        displayName: '03.pdf',
+      },
+      {
+        principal: PRINCIPAL_VERA,
+        assignmentId: 'asg-e-08b',
+        workerPrincipalId: 'worker-vera',
+        workerVersionId: 'v1.0.0',
+        runId: 'run-ingest-e-08b',
+        ownershipEpoch: 1,
+      }
+    );
+
+    const caseId = 'case-slice-e-08b';
+    await harnessStore.attachSourceLink(DEMO_TENANT_ID, caseId, {
+      kind: 'DOCUMENT',
+      evidence: evRef,
+    });
+
+    const { assignment } = await service.createOrLoad(
+      makeInboundCommand('evt-e-08b', [evRef.sourceId]),
+      PRINCIPAL_VERA
+    );
+    assignment.caseId = caseId;
+    await harnessStore.saveAssignment(assignment);
+
+    const workflowResult = await runner.executeAssignmentWorkflow(
+      {
+        assignmentId: assignment.assignmentId,
+        triggerRunId: 'trig-e-08b',
+        sourceReference: caseId,
+        requestedBudgetId: 'BUDGET-2026-10',
+        scenarioId: 'BLINKA-03',
+      },
+      PRINCIPAL_VERA
+    );
+
+    expect(workflowResult.outcome).toBe('PENDING_HUMAN_APPROVAL');
+    expect(workflowResult.assignment.state).toBe('WAITING_FOR_REVIEW');
+    const approvalRequestId = workflowResult.approvalRequestId!;
+
+    // The budget was exhausted by other obligations while the request was
+    // pending: a late APPROVE must be BLOCKED, not authorize (ADR-002/003).
+    scenarioStore.budgets.get('BUDGET-2026-10')!.committedUsd = '4000.00';
+
+    // Simulate the approval being processed without the synchronous resume
+    // running (e.g. dropped callback): the Assignment stays WAITING_FOR_REVIEW.
+    const approval = await decisionPort.resolveApproval(
+      {
+        approvalRequestId,
+        action: 'APPROVE',
+        idempotencyKey: 'idemp-blocked-approve-08b',
+      },
+      PRINCIPAL_ADMIN,
+      'BLINKA-03'
+    );
+    expect(approval.outcome).toBe('BLOCKED');
+
+    // L2 closed the lifecycle: the request is terminal, not dangling PENDING.
+    const request = scenarioStore.approvalRequests.get(approvalRequestId)!;
+    expect(request.status).toBe('APPROVAL_BLOCKED');
+    expect(request.resolvedDecisionId).toBe(approval.decisionId);
+
+    // L3 observes the RESOLVED-with-BLOCKED approval without mutating L2.
+    const observation = await decisionPort.getApprovalStatus(
+      approvalRequestId,
+      PRINCIPAL_ADMIN,
+      'BLINKA-03'
+    );
+    expect(observation?.status).toBe('RESOLVED');
+    if (observation?.status !== 'RESOLVED') {
+      throw new Error(`expected RESOLVED observation, got ${observation?.status}`);
+    }
+    expect(observation.resolutionDecisionId).toBe(approval.decisionId);
+
+    const storedBefore = await harnessStore.getAssignment(DEMO_TENANT_ID, assignment.assignmentId);
+    expect(storedBefore?.state).toBe('WAITING_FOR_REVIEW');
+
+    // Run Reconciler tick: the stranded Assignment must resume, not hang.
+    const reconciler = new HarnessReconciler({
+      store: harnessStore,
+      decisionPort,
+      workflowRunner: runner,
+      defaultTenantId: DEMO_TENANT_ID,
+    });
+
+    const tickReport = await reconciler.tick(DEMO_TENANT_ID);
+    expect(tickReport.observedApprovalsCount).toBeGreaterThanOrEqual(1);
+    expect(tickReport.completedAssignmentsCount).toBe(1);
+
+    const storedAfter = await harnessStore.getAssignment(DEMO_TENANT_ID, assignment.assignmentId);
+    expect(storedAfter?.state).toBe('COMPLETED');
+    expect(storedAfter?.triggerWaitToken).toBeUndefined();
+    expect(storedAfter?.latestL2DecisionId).toBe(approval.decisionId);
+
+    // The resolved outcome is the actual BLOCKED verdict, never a paid outcome.
+    const outbox = await harnessStore.drainOutbox(DEMO_TENANT_ID);
+    const resolvedEvent = outbox.find((e) => e.eventType === 'ASSIGNMENT_RESOLVED');
+    expect(resolvedEvent).toBeDefined();
+    expect(resolvedEvent?.payload.outcome).toBe('BLOCKED');
+  });
 });
