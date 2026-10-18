@@ -40,7 +40,7 @@ export class FinancialAuthorizationService {
       command.proposal.envelopeIds
     );
 
-    const context = this.buildContextSnapshot(command.agentGrantRef, command.workerId, actor.principalId);
+    const context = this.buildContextSnapshot(command.agentGrantRef, command.workerId);
     return evaluatePayable(envelopes, context, 'PROPOSE_PAYABLE');
   }
 
@@ -71,7 +71,7 @@ export class FinancialAuthorizationService {
       );
 
       // 3. Evaluate gates
-      const context = this.buildContextSnapshot(command.agentGrantRef, command.workerId, actor.principalId);
+      const context = this.buildContextSnapshot(command.agentGrantRef, command.workerId);
       const evalResult = evaluatePayable(envelopes, context, 'REQUEST_SIMULATED_AUTHORIZATION');
 
       const decisionId = `dec-${randomUUID()}`;
@@ -442,18 +442,18 @@ export class FinancialAuthorizationService {
 
   private buildContextSnapshot(
     grantId: string,
-    expectedWorkerId?: string,
-    expectedPrincipalId?: string
+    expectedWorkerId?: string
   ): TrustedFinancialContext {
     const workerGrant = this.store.grants.get(grantId);
     if (!workerGrant) {
       throw new Error(`UNKNOWN_AGENT_GRANT: ${grantId}`);
     }
+    // The grant must belong to the worker named on the command. The acting
+    // principal may differ: L3 delegates narrow autonomy to workers, so a
+    // business principal can be the authenticated actor while the worker
+    // executes under its own grant (actor tenant binding is checked at entry).
     if (expectedWorkerId !== undefined && workerGrant.workerId !== expectedWorkerId) {
       throw new Error(`GRANT_WORKER_MISMATCH: grant ${grantId} does not authorize worker ${expectedWorkerId}`);
-    }
-    if (expectedPrincipalId !== undefined && workerGrant.workerId !== expectedPrincipalId) {
-      throw new Error(`GRANT_PRINCIPAL_MISMATCH: acting principal ${expectedPrincipalId} is not the worker bound to grant ${grantId}`);
     }
 
     return {
