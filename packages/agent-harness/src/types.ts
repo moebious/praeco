@@ -296,4 +296,23 @@ export interface FinancialDecisionPort {
     principal: TrustedPrincipal,
     scenarioId?: string
   ): Promise<ApprovalObservation | null>;
+
+  resolveApproval(
+    params: {
+      approvalRequestId: string;
+      action: 'APPROVE' | 'REJECT';
+      reason?: string;
+      idempotencyKey?: string;
+    },
+    principal: TrustedPrincipal,
+    scenarioId?: string
+  ): Promise<FinancialDecisionReference>;
+}
+
+export interface ReconcilerTickReport {
+  tenantId: TenantId;
+  drainedOutboxCount: number;
+  observedApprovalsCount: number;
+  completedAssignmentsCount: number;
+  timestamp: string;
 }
