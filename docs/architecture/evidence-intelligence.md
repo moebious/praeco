@@ -2,7 +2,7 @@
 
 **Status:** Accepted initial architecture and interface baseline. **Implementation not yet verified.**
 
-The complete original handoff is retained in [reference documentation](../reference/l1-original-handoff/README.md). Its [alignment report](l1-handoff-alignment.md) distinguishes original requirements, implemented behavior and remaining provider/human/cross-layer validation. The current `contracts.ts` remains authoritative.
+The current `contracts.ts`, runtime guide and executable acceptance fixtures define Praeco L1. Provider and human-validation limits are recorded in the [evaluation documentation](../evaluation/l1-acceptance.md).
 
 ## Mission
 

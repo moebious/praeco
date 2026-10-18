@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { setup, sample } from './helpers.js';
@@ -7,19 +7,7 @@ import type { ImmutablePersistencePort, ExtractionPort } from '../src/document-p
 import { LabelledTextExtractor } from '../src/extraction.js';
 import { L1Error } from '../src/integrity.js';
 
-describe('original handoff reconciliation', () => {
-  it('preserves every canonical contract token from the original handoff', async () => {
-    function tokens(source: string) {
-      // This fixed declaration-only contract has no regex literals or comment
-      // delimiters inside strings. Preserve literal contents and punctuation.
-      return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
-        .match(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|[^\s]/g);
-    }
-    const current = await readFile(new URL('../src/contracts.ts', import.meta.url), 'utf8');
-    const original = await readFile(new URL('../../../docs/reference/l1-original-handoff/contracts/l1.contracts.ts', import.meta.url), 'utf8');
-    expect(tokens(current)).toEqual(tokens(original));
-  });
-
+describe('L1 runtime boundaries', () => {
   it('retains supplemental chat without manufacturing an invoice or calling extraction', async () => {
     let calls = 0;
     const extractor: ExtractionPort = { provider: 'SHOULD_NOT_RUN', version: 'test', configuration: {}, async extract() { calls++; throw new Error('not invoice'); } };

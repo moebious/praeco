@@ -2,7 +2,7 @@
 
 Praeco repository v1 uses the internal `L1_CONTRACT_VERSION` 3.0.0 wire contract. This document describes implementation choices within that interface. L1 produces financial evidence; financial decisions remain exclusively in L2, and cross-source case correlation remains in L3.
 
-The full original handoff is now available as [historical reference](../reference/l1-original-handoff/README.md). See the [alignment report](l1-handoff-alignment.md) for omissions corrected after comparing it with the earlier public summary.
+See the [L1 acceptance specification](../evaluation/l1-acceptance.md) for the executable scenarios and remaining validation limits.
 
 ## Provision locally
 

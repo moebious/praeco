@@ -37,7 +37,7 @@ Directories are added as their implementations land. The accepted L1 wire contra
 
 ## Run L1
 
-Use Node 22.12+ and npm. Run `npm ci`, `npm run check`, and `npm run l1:demo` for a synthetic offline invoice. See the [L1 provisioning and integration guide](docs/architecture/l1-runtime.md) for hosted LlamaParse/LlamaExtract configuration and L2/L3 handoff. The offline extractor is explicitly labelled; passing local tests does not establish hosted OCR accuracy or financial authorization safety.
+Use Node 22.12+ and npm. Run `npm ci`, `npm run check`, and `npm run l1:demo` for a synthetic offline invoice. See the [L1 provisioning and integration guide](docs/architecture/l1-runtime.md) for hosted LlamaParse/LlamaExtract configuration and L2/L3 integration. The offline extractor is explicitly labelled; passing local tests does not establish hosted OCR accuracy or financial authorization safety.
 
 ## Contribution workflow
 
