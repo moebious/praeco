@@ -287,15 +287,14 @@ export class WorkflowRunner {
           next: 'WAITING_FOR_REVIEW',
           outputRefs: [proposalResult.approvalRequestId ?? 'appr-req'],
           checkpointStage: 'AWAITING_REVIEW',
+          references: {
+            initialL2DecisionId: proposalResult.decisionId,
+            l2ApprovalRequestId: proposalResult.approvalRequestId,
+            triggerWaitToken: `wait-${assignment.assignmentId}-${randomUUID()}`,
+          },
         },
         context
       );
-
-      // Attach approval request ID and decision ID
-      assignment.initialL2DecisionId = proposalResult.decisionId;
-      assignment.l2ApprovalRequestId = proposalResult.approvalRequestId;
-      assignment.triggerWaitToken = `wait-${assignment.assignmentId}-${Date.now()}`;
-      await this.store.saveAssignment(assignment);
 
       if (alreadyResolved) {
         return this.resumeAssignment(
@@ -333,12 +332,11 @@ export class WorkflowRunner {
           next: 'COMPLETED',
           outputRefs: [proposalResult.decisionId],
           checkpointStage: 'FINISHED',
+          references: { latestL2DecisionId: proposalResult.decisionId },
         },
         context
       );
 
-      assignment.latestL2DecisionId = proposalResult.decisionId;
-      await this.store.saveAssignment(assignment);
     }
 
     return {
@@ -465,7 +463,7 @@ export class WorkflowRunner {
       updatedAt: now,
     };
 
-    await this.store.saveAssignment(updated);
+    await this.store.saveAssignment(updated, assignment.version);
 
     await this.store.saveCheckpoint({
       checkpointId: `chk-${randomUUID()}`,

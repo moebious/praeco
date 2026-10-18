@@ -637,36 +637,27 @@ export class SqlHarnessStore implements HarnessStore {
 
       // 2. Thread linking & case creation
       if (params.threadLink) {
+        // A missing row cannot be protected by SELECT FOR UPDATE. The unique
+        // key elects one mapping; the no-op update returns that winning case
+        // even when a different event concurrently proposes another case.
         const threadRes = await client.query(
-          `SELECT case_id FROM harness_thread_case_links
-           WHERE tenant_id = $1 AND provider = $2 AND installation_id = $3 AND thread_id = $4
-           FOR UPDATE`,
+          `INSERT INTO harness_thread_case_links (tenant_id, provider, installation_id, thread_id, case_id)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (tenant_id, provider, installation_id, thread_id)
+           DO UPDATE SET case_id = harness_thread_case_links.case_id
+           RETURNING case_id`,
           [
             params.receipt.tenantId,
             params.threadLink.provider,
             params.threadLink.installationId,
             params.threadLink.threadId,
+            params.threadLink.caseId,
           ]
         );
-        if (threadRes.rowCount && threadRes.rowCount > 0) {
-          params.assignment.caseId = threadRes.rows[0].case_id;
-        } else {
-          await client.query(
-            `INSERT INTO harness_thread_case_links (tenant_id, provider, installation_id, thread_id, case_id)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (tenant_id, provider, installation_id, thread_id) DO NOTHING`,
-            [
-              params.receipt.tenantId,
-              params.threadLink.provider,
-              params.threadLink.installationId,
-              params.threadLink.threadId,
-              params.threadLink.caseId,
-            ]
-          );
-        }
+        params.assignment.caseId = threadRes.rows[0].case_id;
       }
 
-      if (params.caseData) {
+      if (params.caseData && params.caseData.caseId === params.assignment.caseId) {
         await client.query(
           `INSERT INTO harness_cases (tenant_id, case_id, source_links, version)
            VALUES ($1, $2, $3::jsonb, $4)
@@ -772,7 +763,7 @@ export class SqlHarnessStore implements HarnessStore {
           params.outboxEvent.installationId ?? null,
           params.outboxEvent.eventType,
           params.outboxEvent.commandId,
-          JSON.stringify(params.outboxEvent.payload),
+          JSON.stringify({ ...params.outboxEvent.payload, caseId: params.assignment.caseId }),
           params.outboxEvent.occurredAt,
         ]
       );

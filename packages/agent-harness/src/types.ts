@@ -252,6 +252,8 @@ export interface AssignmentPort {
       next: AssignmentState;
       outputRefs: readonly string[];
       checkpointStage?: CheckpointStage;
+      references?: Pick<Assignment,
+        'initialL2DecisionId' | 'latestL2DecisionId' | 'l2ApprovalRequestId' | 'triggerWaitToken'>;
     },
     context: TrustedExecutionContext
   ): Promise<Assignment>;

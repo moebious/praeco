@@ -251,6 +251,16 @@ A named **Reconciler** task runs as a Trigger.dev scheduled task (15–30s caden
 2. **Approval observation:** Read L2 approval lifecycle state (derived expiry `createdAt + 24h` evaluated on read); for expired or resolved approvals, transition L3 assignments to `COMPLETED` and complete L3 waits. The Reconciler never writes or mutates L2 state directly.
 3. **Wait completion fallback:** Completes suspended Trigger waitpoints if the synchronous completion call by the web API failed or timed out.
 
+In the ADR-007 demo implementation, `HarnessReconciler` requires a configured
+`deliverL3Event` handler before claiming L3 outbox events. The handler must
+dispatch the workflow command or deliver the notification and resolve only
+after acceptance; unsupported event types must fail rather than silently
+succeed. Each event is acknowledged only after its handler succeeds. Failed
+deliveries release their claims for retry, and an absent handler leaves events
+unclaimed. Delivery is at least once, so handlers must deduplicate by event ID.
+The tick's L3 `drainedOutboxCount` contribution counts acknowledged events, not
+merely claimed rows.
+
 ## 6. Specialist boundaries
 
 - **Vera:** propose source ingestion and retrieve L1 status; cannot create READY output or approve invoices.

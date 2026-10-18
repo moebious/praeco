@@ -359,26 +359,23 @@ export class InMemoryHarnessStore implements HarnessStore {
     }
 
     if (params.threadLink) {
-      const existingCaseId = await this.findCaseByThread(
+      // Resolve the mapping without an await between read and insert, matching
+      // the SQL store's atomic thread-key election within this process.
+      const threadKey = this.threadKey(
         params.receipt.tenantId,
         params.threadLink.provider,
         params.threadLink.installationId,
         params.threadLink.threadId
       );
+      const existingCaseId = this.threadCaseLinks.get(threadKey);
       if (existingCaseId) {
         params.assignment.caseId = existingCaseId;
       } else {
-        await this.linkThreadToCase(
-          params.receipt.tenantId,
-          params.threadLink.provider,
-          params.threadLink.installationId,
-          params.threadLink.threadId,
-          params.threadLink.caseId
-        );
+        this.threadCaseLinks.set(threadKey, params.threadLink.caseId);
       }
     }
 
-    if (params.caseData) {
+    if (params.caseData && params.caseData.caseId === params.assignment.caseId) {
       await this.saveCase(params.caseData);
     }
 
@@ -386,7 +383,10 @@ export class InMemoryHarnessStore implements HarnessStore {
     this.inboundReceipts.set(key, { ...params.receipt });
     await this.saveCommandReceipt(params.commandReceipt);
     await this.recordExecutionEvent(params.executionEvent);
-    await this.enqueueOutbox(params.outboxEvent);
+    await this.enqueueOutbox({
+      ...params.outboxEvent,
+      payload: { ...params.outboxEvent.payload, caseId: params.assignment.caseId },
+    });
 
     return { assignment: { ...params.assignment }, isDuplicate: false };
   }
