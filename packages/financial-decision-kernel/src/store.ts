@@ -20,7 +20,15 @@ export interface ApprovalRequestRecord {
   budgetLimitRevision: number;
   originatingWorkerGrantRef: string;
   policyRevisionId: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+  /**
+   * Approval-request lifecycle state. These are request lifecycle states, not
+   * L2 verdicts: `APPROVAL_BLOCKED` means the human APPROVE was processed but
+   * the fresh six-gate re-evaluation refused to authorize, so the request is
+   * closed with a BLOCKED resolution decision (ADR-002/ADR-003: approval is
+   * consent, never an override of G1-G5). The three canonical outcomes of
+   * `FinancialOutcome` are unaffected.
+   */
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'APPROVAL_BLOCKED';
   createdAt: string; // ISOInstant
   expiresAt: string; // createdAt + 24h
   resolvedAt: string | null;

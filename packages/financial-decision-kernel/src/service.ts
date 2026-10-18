@@ -9,7 +9,7 @@ import type {
   TrustedActorContext,
   TrustedFinancialContext,
 } from './types.js';
-import type { TransactionalFinancialStore } from './store.js';
+import type { TransactionalFinancialStore, ApprovalRequestRecord } from './store.js';
 import type {
   AuthoritativeCommitPort, AuthoritativeCommandLookup, AuthoritativeCommandResult,
 } from './commit-port.js';
@@ -433,8 +433,14 @@ export class FinancialAuthorizationService {
           commitmentId: null,
           approvalRequestId: request.approvalRequestId,
         };
-        this.store.decisions.set(decisionId, record);
-        return record;
+        return this.closeApprovalAsBlocked({
+          request,
+          record,
+          actor,
+          idempotencyKey: command.idempotencyKey,
+          payloadDigest,
+          resolvedAt: currentTime,
+        });
       }
 
       // Staleness checks on approval binding
@@ -509,8 +515,10 @@ export class FinancialAuthorizationService {
           portResult.status === 'INSUFFICIENT_BUDGET'
         ) {
           // A concurrent transaction claimed the payable or exhausted the
-          // budget during the wait: the approval is not consumed and stays
-          // retryable.
+          // budget during the wait. The human APPROVE is consent, not an
+          // override (ADR-003): the request closes as APPROVAL_BLOCKED with
+          // this immutable BLOCKED resolution decision, so a retry under a new
+          // key fails closed instead of minting a second decision.
           const duplicate =
             portResult.status === 'DUPLICATE_OBLIGATION' ||
             portResult.status === 'CONFLICTING_OBLIGATION';
@@ -551,8 +559,14 @@ export class FinancialAuthorizationService {
             commitmentId: null,
             approvalRequestId: request.approvalRequestId,
           };
-          this.store.decisions.set(decisionId, record);
-          return record;
+          return this.closeApprovalAsBlocked({
+            request,
+            record,
+            actor,
+            idempotencyKey: command.idempotencyKey,
+            payloadDigest,
+            resolvedAt: currentTime,
+          });
         }
 
         if (portResult.status === 'IDEMPOTENT_REPLAY') {
@@ -866,6 +880,57 @@ export class FinancialAuthorizationService {
       recordedAt: ids.occurredAt,
     });
     return decisionRecord;
+  }
+
+  /**
+   * Closes an approval request whose human APPROVE could not authorize.
+   *
+   * The request reaches the terminal lifecycle state `APPROVAL_BLOCKED` (a
+   * request lifecycle state, not a fourth L2 verdict), the immutable BLOCKED
+   * resolution decision is recorded with its idempotency receipt, and
+   * `APPROVAL_RESOLVED` is emitted. This is what makes the cycle close:
+   * without it the request stayed `PENDING`, a retry with the same key minted a
+   * second BLOCKED decision, and the L3 reconciler never resumed the stranded
+   * assignment (l3-contract: if L2 emitted a resolution decision, use that
+   * actual outcome, which may be BLOCKED).
+   */
+  private closeApprovalAsBlocked(input: {
+    request: ApprovalRequestRecord;
+    record: FinancialDecisionRecord;
+    actor: TrustedActorContext;
+    idempotencyKey: string;
+    payloadDigest: string;
+    resolvedAt: string;
+  }): FinancialDecisionRecord {
+    const { request, record, actor, resolvedAt } = input;
+
+    request.status = 'APPROVAL_BLOCKED';
+    request.resolvedAt = resolvedAt;
+    request.resolvedByPrincipalId = actor.principalId;
+    request.resolvedDecisionId = record.decisionId;
+
+    this.store.decisions.set(record.decisionId, record);
+    this.store.receipts.set(input.idempotencyKey, {
+      tenantId: actor.tenantId,
+      idempotencyKey: input.idempotencyKey,
+      payloadDigest: input.payloadDigest,
+      decisionId: record.decisionId,
+      recordedAt: resolvedAt,
+    });
+    this.store.ledgerEvents.push({
+      eventId: `evt-${randomUUID()}`,
+      tenantId: actor.tenantId,
+      eventType: 'APPROVAL_RESOLVED',
+      payload: {
+        approvalRequestId: request.approvalRequestId,
+        decisionId: record.decisionId,
+        action: 'APPROVE',
+        outcome: 'BLOCKED',
+      },
+      occurredAt: resolvedAt,
+    });
+
+    return record;
   }
 
   private buildContextSnapshot(

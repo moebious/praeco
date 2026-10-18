@@ -220,6 +220,17 @@ export class L2FinancialDecisionAdapter implements FinancialDecisionPort {
       };
     }
 
+    // A human APPROVE processed by L2 whose fresh six-gate re-evaluation
+    // refused to authorize. The request lifecycle is closed, so from L3's
+    // perspective the approval is RESOLVED and its actual (BLOCKED) outcome
+    // must be loaded through resolutionDecisionId.
+    if (req.status === 'APPROVAL_BLOCKED') {
+      return {
+        status: 'RESOLVED',
+        resolutionDecisionId: req.resolvedDecisionId ?? req.decisionId,
+      };
+    }
+
     if (req.status === 'REJECTED') {
       return {
         status: 'REJECTED',

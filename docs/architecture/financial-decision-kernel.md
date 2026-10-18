@@ -34,7 +34,7 @@ L2 is the **sole authority** for business payable deduplication, beneficiary/acc
 - BLOCKED — at least one hard failure, insufficient budget, inadmissible evidence, or other non-overridable ineligibility.
 - PENDING_HUMAN_APPROVAL — all hard gates passed, but a specifically eligible authorization exceeds autonomous scope.
 
-Approval request lifecycle states (approved, rejected, expired, cancelled) are **not additional L2 verdicts**. An eligible human response triggers a **fresh L2 evaluation** against current authoritative state.
+Approval request lifecycle states (approved, rejected, expired, cancelled, `APPROVAL_BLOCKED`) are **not additional L2 verdicts**. An eligible human response triggers a **fresh L2 evaluation** against current authoritative state. When that re-evaluation hard-fails (including a lost or revoked grant action at G6), the request closes in the terminal lifecycle state `APPROVAL_BLOCKED`: the recorded decision is the canonical `BLOCKED` verdict and approval is consent, never an override of G1–G5.
 
 ## 3. Conceptual interfaces (not implementation contracts)
 
