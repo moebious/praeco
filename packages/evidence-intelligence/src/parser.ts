@@ -7,7 +7,7 @@ import { L1Error, utf8 } from './integrity.js';
 export class AdaptiveParser {
   // LiteParse uses its bundled local Tesseract OCR only on pages that need it.
   // OCR-assisted output remains REVIEW_REQUIRED until a human validates it.
-  private readonly lite = new LiteParse({ ocrEnabled: true, outputFormat: 'json', includeComplexity: true, maxPages: 50, poolSize: 1, parseTimeoutMs: 30_000 });
+  private readonly lite = new LiteParse({ ocrEnabled: true, outputFormat: 'json', includeComplexity: true, maxPages: 50, poolSize: 1, parseTimeoutMs: 60_000 });
   constructor(private readonly store: FileEvidenceStore, private readonly hosted?: HostedParsePort) {}
   async close(): Promise<void> { await this.lite.close(); }
   async parse(source: DocumentSource, bytes: Uint8Array): Promise<ParsedDocument> {
