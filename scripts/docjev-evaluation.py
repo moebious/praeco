@@ -10,6 +10,8 @@ import os
 import subprocess
 import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,15 +45,62 @@ def sanitized_failure(stderr: str) -> dict:
     return {"category": "unknown"}
 
 
+
+KEY_INFO_URL = "https://openrouter.ai/api/v1/key"
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Prevent accidentally forwarding credentials to a redirected host."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def check_openrouter_key(api_key: str) -> dict:
+    """Validate key using read-only OpenRouter endpoint, without exposing responses."""
+    if not api_key:
+        return {"category": "missing_credential"}
+    request = urllib.request.Request(
+        KEY_INFO_URL,
+        headers={"Authorization": "Bearer " + api_key.strip(), "Accept": "application/json"},
+        method="GET",
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=10) as response:
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        exc.close()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return {"category": "network_or_timeout"}
+    if status == 200:
+        return {"category": "key_accepted", "httpStatus": 200}
+    if status == 401:
+        return {"category": "key_rejected", "httpStatus": 401}
+    if status == 403:
+        return {"category": "key_forbidden", "httpStatus": 403}
+    if status == 429:
+        return {"category": "rate_limit", "httpStatus": 429}
+    if 500 <= status < 600:
+        return {"category": "provider_unavailable", "httpStatus": status}
+    return {"category": "unexpected_http_status", "httpStatus": status}
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["preflight", "live"], default="preflight")
+    parser.add_argument("--mode", choices=["preflight", "auth", "live"], default="preflight")
     parser.add_argument("--docjev-root", type=Path, required=True)
     args = parser.parse_args()
     docjev = args.docjev_root.resolve()
     executable = [sys.executable, "-m", "jev_docs.cli"]
-    if args.mode == "live" and not os.environ.get("TYPESAFE_API_KEY"):
-        raise SystemExit("TYPESAFE_API_KEY is required for live inference.")
+    if args.mode in {"auth", "live"}:
+        auth = check_openrouter_key(os.environ.get("TYPESAFE_API_KEY", ""))
+        if args.mode == "auth" or auth.get("category") != "key_accepted":
+            print(json.dumps({"mode": args.mode, "provider": "OpenRouter",
+                              "authentication": auth, "jevCalls": 0,
+                              "note": "Key validation does not prove Jev route access."}, indent=2))
+            if auth.get("category") != "key_accepted":
+                raise SystemExit(1)
+            return
     results = []
     for filename, expected in SELECTED.items():
         source = FIXTURES / filename
@@ -82,7 +131,7 @@ def main():
             results.append({"file": filename, "status": "invalid_output"})
     print(json.dumps({"mode": args.mode, "model": MODEL if args.mode == "live" else None,
                       "provider": "OpenRouter" if args.mode == "live" else "none",
-                      "attempted": len(SELECTED), "results": results,
+                      "attempted": len(results), "eligible": len(SELECTED), "results": results,
                       "independentHumanAnnotation": False,
                       "fieldLevelAccuracyEvaluated": False}, indent=2))
     if any(r["status"] != "pass" for r in results):
