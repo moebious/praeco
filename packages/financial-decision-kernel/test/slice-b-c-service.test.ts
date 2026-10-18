@@ -6,7 +6,7 @@ import {
   type EnvelopeResolver,
   type ReadyInvoiceEnvelope,
   type AuthoritativeCommitPort,
-  type FinancialDecisionRecord,
+  type AuthoritativeCommitCommand,
   type TrustedActorContext,
 } from '../src/index.js';
 import { createSyntheticEnvelope } from './helpers.js';
@@ -96,6 +96,7 @@ describe('L2 Slices B & C — Transactional Store, Commit, and Concurrency', () 
     });
     resolver.register(envelope);
     const commitPort: AuthoritativeCommitPort = {
+      async lookupCommandResult() { return null; },
       async commitAuthorizedPayable(command) {
         return {
           status: 'CONFLICTING_OBLIGATION',
@@ -133,18 +134,22 @@ describe('L2 Slices B & C — Transactional Store, Commit, and Concurrency', () 
     });
     resolver.register(envelope);
 
-    let persistedRecord: FinancialDecisionRecord | undefined;
+    let persisted: AuthoritativeCommitCommand | undefined;
     const commitPort: AuthoritativeCommitPort = {
+      async lookupCommandResult() { return null; },
       async commitAuthorizedPayable(command) {
-        if (persistedRecord) {
+        if (persisted) {
           return {
             status: 'IDEMPOTENT_REPLAY',
-            decisionId: persistedRecord.decisionId,
-            decisionRecord: persistedRecord,
+            decisionId: persisted.decisionId,
+            decisionRecord: persisted.decisionRecord,
+            canonicalKey: persisted.canonicalKey,
+            amountUsd: persisted.amountUsd,
+            budgetId: persisted.budgetId,
             budgetCommittedUsd: '2200.00',
           };
         }
-        persistedRecord = command.decisionRecord;
+        persisted = command;
         return {
           status: 'COMMITTED',
           decisionId: command.decisionId,

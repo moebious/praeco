@@ -34,6 +34,16 @@ export type CommitPayableResult =
   | { status: 'CONFLICTING_OBLIGATION'; canonicalKey: string }
   | { status: 'INSUFFICIENT_BUDGET'; availableUsd: string };
 
+export interface StoredCommandResult {
+  decisionId: string;
+  commitmentId: string;
+  decisionRecord: unknown;
+  canonicalKey: string;
+  amountUsd: string;
+  budgetId: string;
+  budgetCommittedUsd: string | null;
+}
+
 /**
  * SQL-backed authoritative store for the ADR-003 financial transaction
  * boundary. The commit path is one database transaction: idempotency
@@ -103,6 +113,46 @@ export class SqlFinancialStore {
     }
     const raw = result.rows[0]!.record;
     return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  }
+
+  /** Tenant-scoped historical outcome lookup, never a new financial action.
+   * LEFT JOINs distinguish a missing receipt from corrupted committed state. */
+  public async getCommandResult(
+    tenantId: string,
+    idempotencyKey: string,
+    payloadDigest: string
+  ): Promise<StoredCommandResult | null> {
+    const result = await this.pool.query(
+      `SELECT r.payload_digest, r.decision_id, d.record,
+              c.commitment_id, c.canonical_payable_key, c.unrounded_usd::text AS amount_usd,
+              c.budget_id, b.committed_usd::text AS budget_committed_usd
+       FROM idempotency_receipts r
+       LEFT JOIN decisions d ON d.tenant_id = r.tenant_id AND d.decision_id = r.decision_id
+       LEFT JOIN commitments c ON c.tenant_id = r.tenant_id AND c.decision_id = r.decision_id
+       LEFT JOIN budgets b ON b.tenant_id = c.tenant_id AND b.budget_id = c.budget_id
+       WHERE r.tenant_id = $1 AND r.idempotency_key = $2`,
+      [tenantId, idempotencyKey]
+    );
+    if (!result.rowCount) return null;
+    const row = result.rows[0]!;
+    if (row.payload_digest !== payloadDigest) throw new Error('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH');
+    if (
+      result.rowCount !== 1 || row.record == null ||
+      ![row.decision_id, row.commitment_id, row.canonical_payable_key, row.amount_usd,
+        row.budget_id].every(value => typeof value === 'string') ||
+      (row.budget_committed_usd !== null && typeof row.budget_committed_usd !== 'string')
+    ) {
+      throw new Error('DURABLE_COMMAND_RESULT_INCOMPLETE');
+    }
+    return {
+      decisionId: row.decision_id,
+      commitmentId: row.commitment_id,
+      decisionRecord: typeof row.record === 'string' ? JSON.parse(row.record) : row.record,
+      canonicalKey: row.canonical_payable_key,
+      amountUsd: row.amount_usd,
+      budgetId: row.budget_id,
+      budgetCommittedUsd: row.budget_committed_usd,
+    };
   }
 
   public async commitPayable(command: CommitPayableCommand): Promise<CommitPayableResult> {

@@ -26,6 +26,21 @@ duplicate claim does not debit budget; an insufficient-budget attempt rolls
 back its provisional obligation claim. Non-commit decision records and their
 idempotency outcomes remain in the in-memory kernel store.
 
+## Successful-command recovery
+
+Before loading evidence or reevaluating current gates, the protected service
+performs a tenant/key/payload-bound durable command lookup. An existing
+successful outcome is returned unchanged and its read mirrors are rebuilt
+from stored commit metadata. A missing receipt still requires current
+authorization; lookup errors and payload drift fail closed. Approval outcome
+recovery retains the FinanceAdmin and tenant checks and does not create
+durable pending-approval state.
+
+Recovered commitments, obligations, and receipt history retain the persisted
+decision timestamp. The in-memory receipt's optional `recoveredAt` records
+recovery time separately. Repeated recovery does not append duplicate local
+authorization events or debit the SQL budget again.
+
 ## Running
 
 The PostgreSQL-backed tests run only when `DATABASE_URL` is set; otherwise

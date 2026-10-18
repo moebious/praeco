@@ -2,6 +2,8 @@ import type {
   AuthoritativeCommitCommand,
   AuthoritativeCommitPort,
   AuthoritativeCommitResult,
+  AuthoritativeCommandLookup,
+  AuthoritativeCommandResult,
   FinancialDecisionRecord,
 } from '@praeco/financial-decision-kernel';
 import type { SqlFinancialStore } from './sql-store.js';
@@ -15,15 +17,18 @@ function isCommittedDecisionRecord(
   return (
     record.outcome === 'AUTHORIZED_SIMULATED' &&
     record.decisionId === expectedDecisionId &&
+    typeof record.explanation === 'string' &&
     typeof record.tenantId === 'string' &&
     typeof record.payableId === 'string' &&
     typeof record.occurredAt === 'string' &&
+    Number.isFinite(Date.parse(record.occurredAt)) &&
     typeof record.financialContextDigest === 'string' &&
     typeof record.intentDigestSha256 === 'string' &&
     typeof record.policyRevisionId === 'string' &&
     typeof record.grantRevisionId === 'string' &&
     Array.isArray(record.gateChecks) &&
-    (typeof record.commitmentId === 'string' || record.commitmentId === null) &&
+    typeof record.commitmentId === 'string' &&
+    record.commitmentId.length > 0 &&
     (typeof record.approvalRequestId === 'string' || record.approvalRequestId === null)
   );
 }
@@ -35,7 +40,28 @@ function isCommittedDecisionRecord(
  * exactly, and idempotent replays include the persisted decision record.
  */
 export class SqlCommitPort implements AuthoritativeCommitPort {
-  public constructor(private readonly store: SqlFinancialStore) {}
+  public constructor(
+    private readonly store: Pick<SqlFinancialStore, 'commitPayable' | 'getCommandResult' | 'getCommittedUsd'>
+  ) {}
+
+  public async lookupCommandResult(query: AuthoritativeCommandLookup): Promise<AuthoritativeCommandResult | null> {
+    const result = await this.store.getCommandResult(query.tenantId, query.idempotencyKey, query.payloadDigest);
+    if (!result) return null;
+    const record = result.decisionRecord;
+    if (
+      !isCommittedDecisionRecord(record, result.decisionId) ||
+      record.tenantId !== query.tenantId || record.commitmentId !== result.commitmentId
+    ) {
+      throw new Error('IDEMPOTENT_DECISION_RECORD_INVALID');
+    }
+    return {
+      decisionRecord: record,
+      canonicalKey: result.canonicalKey,
+      amountUsd: result.amountUsd,
+      budgetId: result.budgetId,
+      budgetCommittedUsd: result.budgetCommittedUsd,
+    };
+  }
 
   public async commitAuthorizedPayable(
     command: AuthoritativeCommitCommand
@@ -54,22 +80,20 @@ export class SqlCommitPort implements AuthoritativeCommitPort {
       occurredAt: command.occurredAt,
     });
 
-    const budgetCommittedUsd = await this.budgetCommitted(command.tenantId, command.budgetId);
-
-    if (result.status === 'COMMITTED') {
-      return { status: 'COMMITTED', decisionId: result.decisionId, budgetCommittedUsd };
-    }
     if (result.status === 'IDEMPOTENT_REPLAY') {
-      const record = await this.store.getDecisionRecord(result.decisionId);
-      if (!isCommittedDecisionRecord(record, result.decisionId)) {
+      const recorded = await this.lookupCommandResult(command);
+      if (!recorded || recorded.decisionRecord.decisionId !== result.decisionId) {
         throw new Error('IDEMPOTENT_DECISION_RECORD_INVALID');
       }
       return {
         status: 'IDEMPOTENT_REPLAY',
         decisionId: result.decisionId,
-        decisionRecord: record,
-        budgetCommittedUsd,
+        ...recorded,
       };
+    }
+    const budgetCommittedUsd = await this.budgetCommitted(command.tenantId, command.budgetId);
+    if (result.status === 'COMMITTED') {
+      return { status: 'COMMITTED', decisionId: result.decisionId, budgetCommittedUsd };
     }
     if (result.status === 'DUPLICATE_OBLIGATION') {
       return { status: 'DUPLICATE_OBLIGATION', canonicalKey: result.canonicalKey, budgetCommittedUsd };
