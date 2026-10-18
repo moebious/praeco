@@ -34,6 +34,8 @@ jobs:
           test "$(git -C docjev-upstream rev-parse HEAD)" = c7abe276a970605feb9cb8b27513365b6c10726e
       - name: Install pinned DocJev package
         run: python -m pip install ./docjev-upstream
+      - name: Test diagnostics without external requests
+        run: python -m unittest discover -s scripts -p 'test_docjev_evaluation.py'
       - name: Run offline preflight or explicitly selected live experiment
         env:
           TYPESAFE_API_KEY: ${{ inputs.mode == 'live' && secrets.OPENROUTER_API_KEY || '' }}

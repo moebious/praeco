@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import subprocess
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +17,30 @@ FIXTURES = ROOT / "packages/evidence-intelligence/test/fixtures/corpus"
 RULES = ROOT / "docs/evaluation/docjev-rules.yaml"
 SELECTED = {"01.pdf": "invoice", "02.pdf": "invoice"}
 MODEL = "jev-1.14"
+
+def sanitized_failure(stderr: str) -> dict:
+    """Emit only a numeric status and a bounded failure class, never response text."""
+    match = re.search(r"Jev request failed \((\d{3})\)", stderr)
+    if match:
+        status = int(match.group(1))
+        category = ("authentication" if status in (401, 403) else
+                    "rate_limit" if status == 429 else
+                    "request_rejected" if 400 <= status < 500 else
+                    "provider_unavailable" if status >= 500 else "unknown")
+        return {"category": category, "httpStatus": status}
+    if "ContextLimitError" in stderr or "input size" in stderr:
+        return {"category": "context_limit"}
+    if "invalid category decision" in stderr or "incomplete answer set" in stderr:
+        return {"category": "invalid_provider_response"}
+    if "unreadable response" in stderr:
+        return {"category": "invalid_provider_response"}
+    if "ConnectionError" in stderr or "Timeout" in stderr:
+        return {"category": "network_or_timeout"}
+    if "Unknown model" in stderr or "not supported" in stderr:
+        return {"category": "model_or_protocol"}
+    if "TYPESAFE_API_KEY" in stderr:
+        return {"category": "missing_credential"}
+    return {"category": "unknown"}
 
 
 def main():
@@ -38,8 +63,10 @@ def main():
             cmd = executable + ["classify", str(source), "--rules", str(RULES), "--engine", "jev", "--model", MODEL]
         run = subprocess.run(cmd, cwd=docjev, capture_output=True, text=True, timeout=150, check=False)
         if run.returncode:
-            results.append({"file": filename, "status": "error", "error": "DocJev invocation failed", "exitCode": run.returncode})
-            continue
+            results.append({"file": filename, "status": "error", "error": "DocJev invocation failed",
+                            "exitCode": run.returncode, "diagnostic": sanitized_failure(run.stderr)})
+            # Stop after the first failure to minimize paid retries and avoid repetitive billing.
+            break
         try:
             obj = json.loads(run.stdout)
             if args.mode == "preflight":
