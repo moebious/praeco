@@ -5,6 +5,7 @@ import type {
   SpecialistToolDefinition,
 } from './types.js';
 import type { HarnessStore } from '../store.js';
+import { ensureHarnessWorkerGrant } from '../l2-grants.js';
 import {
   createScenarioStore,
   buildScenarios,
@@ -68,6 +69,11 @@ export function createKaelTools(_options: KaelToolsOptions): SpecialistToolDefin
       const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
       const store = createScenarioStore(scenarioId);
       const service = new FinancialAuthorizationService(store, resolver);
+      // Read-only preview: the worker operates under its own grant with exactly
+      // the PROPOSE_PAYABLE action (least privilege, no authorization rights).
+      const agentGrantRef = ensureHarnessWorkerGrant(store, context.workerPrincipalId, [
+        'PROPOSE_PAYABLE',
+      ]);
 
       const actor: TrustedActorContext = {
         tenantId: store.tenantId,
@@ -83,7 +89,7 @@ export function createKaelTools(_options: KaelToolsOptions): SpecialistToolDefin
             envelopeIds: [targetScenario.envelope.envelopeId],
           },
           workerId: context.workerPrincipalId,
-          agentGrantRef: 'grant-synthetic-worker',
+          agentGrantRef,
           idempotencyKey: `preview-${Date.now()}`,
         },
         actor
