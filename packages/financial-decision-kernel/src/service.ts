@@ -194,6 +194,7 @@ export class FinancialAuthorizationService {
           resolvedAt: null,
           resolvedByPrincipalId: null,
           decisionId,
+          resolvedDecisionId: null,
         });
 
         this.store.ledgerEvents.push({
@@ -281,13 +282,14 @@ export class FinancialAuthorizationService {
         request.status = 'REJECTED';
         request.resolvedAt = currentTime;
         request.resolvedByPrincipalId = actor.principalId;
+        request.resolvedDecisionId = decisionId;
 
         const record: FinancialDecisionRecord = {
           outcome: 'BLOCKED',
           explanation: 'Pago rechazado por el administrador financiero (FinanceAdmin).',
           gateChecks: [],
           financialContextDigest: digest({ rejectedApprovalRequestId: request.approvalRequestId }),
-        intentDigestSha256: '',
+          intentDigestSha256: '',
           policyRevisionId: this.store.policy.policyRevisionId,
           grantRevisionId: 'grant-human-override',
           decisionId,
@@ -367,6 +369,7 @@ export class FinancialAuthorizationService {
       request.status = 'APPROVED';
       request.resolvedAt = currentTime;
       request.resolvedByPrincipalId = actor.principalId;
+      request.resolvedDecisionId = decisionId;
 
       const unroundedUsd = decimal(request.unroundedUsd);
       budget.committedUsd = decimal(budget.committedUsd).plus(unroundedUsd).toString();

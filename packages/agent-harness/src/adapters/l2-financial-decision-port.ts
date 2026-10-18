@@ -197,13 +197,12 @@ export class L2FinancialDecisionAdapter implements FinancialDecisionPort {
     const currentTime = this.now();
     const isExpired = Date.parse(currentTime) > Date.parse(req.expiresAt);
 
+    // Observations are computed from state without mutating it: expiry is
+    // derived from expiresAt on every read, and the authoritative EXPIRED
+    // transition stays with the L2 write path (resolveApproval).
     if (req.status === 'PENDING') {
       if (isExpired) {
-        req.status = 'EXPIRED';
-        return {
-          status: 'EXPIRED',
-          resolutionDecisionId: req.decisionId,
-        };
+        return { status: 'EXPIRED' };
       }
       return {
         status: 'PENDING',
@@ -214,20 +213,20 @@ export class L2FinancialDecisionAdapter implements FinancialDecisionPort {
     if (req.status === 'APPROVED') {
       return {
         status: 'RESOLVED',
-        resolutionDecisionId: req.decisionId,
+        // The resolving decision, not the original PENDING decision the
+        // request was created with (l3-contract: append the resolution
+        // reference; resolution produces a new decision ID).
+        resolutionDecisionId: req.resolvedDecisionId ?? req.decisionId,
       };
     }
 
     if (req.status === 'REJECTED') {
       return {
         status: 'REJECTED',
-        resolutionDecisionId: req.decisionId,
+        resolutionDecisionId: req.resolvedDecisionId ?? req.decisionId,
       };
     }
 
-    return {
-      status: 'EXPIRED',
-      resolutionDecisionId: req.decisionId,
-    };
+    return { status: 'EXPIRED' };
   }
 }

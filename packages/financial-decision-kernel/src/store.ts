@@ -25,7 +25,10 @@ export interface ApprovalRequestRecord {
   expiresAt: string; // createdAt + 24h
   resolvedAt: string | null;
   resolvedByPrincipalId: string | null;
+  /** Decision recorded when the request was created (the PENDING decision). */
   decisionId: string;
+  /** Decision produced by the resolution itself; null until resolved. */
+  resolvedDecisionId: string | null;
 }
 
 export interface CommandReceiptRecord {
