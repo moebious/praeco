@@ -1,8 +1,8 @@
 # Praeco — estación de trabajo de cuentas por pagar
 
-Frame B1, acceso Clerk B2 y metadata conversacional PostgreSQL/Neon B3.
-Sin claves de Clerk se conserva la demo local. El chat sigue programado:
-no hay proveedor de modelo ni integración financiera conectados.
+Frame B1, acceso Clerk B2, metadata conversacional PostgreSQL/Neon B3 y chat
+OpenRouter + Trigger.dev B4. Sin claves de Clerk se conserva la demo local.
+El chat no tiene autoridad financiera ni herramientas de pago.
 
 ## Estado del bloque
 
@@ -21,6 +21,11 @@ no hay proveedor de modelo ni integración financiera conectados.
   Cada perfil tiene ID/version estable; abrirlo prepara las tres conversaciones
   sin duplicarlas. PostgreSQL conserva IDs, títulos, preview y fechas, **no mensajes**.
   Login no concede FinanceAdmin.
+- Con OpenRouter y Trigger.dev Development configurados, los chats autenticados
+  usan un modelo explícito y el transcript de Trigger. El servidor comprueba
+  tenant y propietario; Neon guarda solo metadata y recibos de uso/costo.
+  La única herramienta disponible inspecciona capacidades sintéticas y de solo
+  lectura. No se exponen documentos, decisiones, aprobaciones ni pagos al modelo.
 
 ## Comandos
 
@@ -99,10 +104,11 @@ por el usuario. Se usa Drizzle y `pg`, con pool diferido (máximo 4 conexiones),
 timeouts y verificación TLS para conexiones remotas. No se abre un pool al
 importar módulos, compilar o cargar la demo sin autenticación.
 
-La única migración escribe en **`praeco_workspace`**: `conversations` y
-`schema_migrations`. No toca `public`, tablas financieras ni el ledger. No hay
-DDL automático desde web. Migración versionada, transaccional e idempotente;
-rechaza un checksum modificado en lugar de sobrescribir tablas.
+Las migraciones escriben únicamente en **`praeco_workspace`**: conversaciones,
+control de acceso al chat, recibos de uso y `schema_migrations`. No tocan
+`public`, tablas financieras ni el ledger. No hay DDL automático desde web.
+Son versionadas, transaccionales e idempotentes; rechazan un checksum modificado
+en lugar de sobrescribir una migración aplicada.
 
 Desde la raíz, después de confirmar que el destino es Development:
 
@@ -129,12 +135,45 @@ Prueba humana tras migrar:
 4. Las rutas antiguas `caso-0142`, etc. pertenecen solo a la demo sin claves; no se
    importan como historial de usuarios autenticados.
 
-Si falta configuración, migración o conexión, la UI informa el problema y no
-recurre a conversaciones falsas. Los reads no crean filas; únicamente un click
-autenticado sobre un especialista inicializa metadata. El preview indica que
-no hay mensajes persistidos: el compositor programado es local y se pierde al
-recargar. Trigger será dueño del transcript según el siguiente bloque; Neon no
-se presenta como un segundo historial autoritativo.
+Si falta configuración, migración o conexión, la UI informa el problema. Los
+reads no crean filas; únicamente un click autenticado sobre un especialista
+inicializa metadata. Cuando el chat en vivo no está configurado, la conversación
+persistida indica que sus mensajes programados no se guardan. En el modo en vivo,
+Trigger es el dueño del transcript; Neon no es un segundo historial autoritativo.
+
+## OpenRouter y Trigger.dev: chat en vivo
+
+Configura `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `TRIGGER_PROJECT_REF` y
+`TRIGGER_SECRET_KEY` en el único `.env.local` de la raíz. Usa el proyecto y la
+clave **Development** de Trigger, y fija un modelo compatible con herramientas.
+`npm run chat:status --workspace @praeco/finance-workspace` solo consulta el
+catálogo de modelos, precios y configuración; no realiza inferencia.
+
+Las sesiones se autorizan tras verificar Clerk, tenant, propietario y una
+vinculación opaca generada por el servidor. Trigger conserva los mensajes;
+Neon conserva el presupuesto y los recibos exactos de costo/uso. Cada chat tiene
+un límite de costo de USD 0.05. Cada paso reserva antes de llamar al proveedor,
+desactiva reintentos y fallback; si el proveedor no reporta costo, se conserva
+una reserva bloqueante. La interfaz permite detener la generación y recuperar
+transcripciones anteriores.
+
+Desde la raíz del repositorio, inicia el worker de desarrollo:
+
+```bash
+npm run chat:dev --workspace @praeco/finance-workspace
+```
+
+El smoke en vivo es una operación de pago y requiere límites explícitos. Envía
+solo los dos mensajes sintéticos del script, permite como máximo tres llamadas
+y USD 0.05 en total, verifica la herramienta de solo lectura y la recarga del
+transcript, y cierra la sesión:
+
+```bash
+npm run chat:smoke --workspace @praeco/finance-workspace -- \
+  --allow-paid --budget-usd=0.05 --max-calls=3
+```
+
+No conectes herramientas financieras ni aumentes esos límites para esta prueba.
 
 ## Alcance y pruebas
 
@@ -154,5 +193,33 @@ verificar tenant y ownership del recurso. `requireWorkspacePageAccess()` permite
 solo las pantallas sintéticas en modo demo; **no** habilita acciones privadas.
 No hay asignación automática de permisos financieros ni persistencia de casos.
 
-OpenRouter, Trigger.dev y Daytona quedan para incrementos posteriores.
-Configurar sus variables no activa sus integraciones.
+Daytona sigue pendiente; configurar sus variables no activa una integración.
+
+## Cuentas por pagar (superficie de aceptación L2)
+
+`/payables` lista los casos sintéticos y `/payables/[caseId]` muestra evidencia,
+preview, veredicto y los seis gates del kernel determinista. Los handlers de
+servidor `/api/payables/[caseId]/preview`, `/api/payables/[caseId]/decide` y
+`/api/payables/[caseId]/approvals/[approvalRequestId]` ejecutan el pipeline L1
+real y el kernel L2 real; el navegador nunca decide. Los desenlaces visibles son
+exactamente `AUTHORIZED_SIMULATED`, `BLOCKED` o `PENDING_HUMAN_APPROVAL`; nunca
+se presenta un estado de pago —ni en inglés ni en español—. Resolver una
+aprobación exige el rol `FinanceAdmin`, mapeado solo desde el claim de servidor
+`praecoRoles` (`org:admin` **no** lo concede). Sin Clerk se declara
+explícitamente un actor sintético de demo. Ante evidencia crítica ausente el caso
+falla cerrado: `payable-09` demuestra esa ruta degradada.
+
+Corre sobre el runtime determinista en proceso de ADR-007 (`lib/finance/runtime.ts`,
+singleton perezoso y ledger en memoria por `caseId`): **no hay durabilidad entre
+procesos** y reiniciar la web reinicia las decisiones. Los sobres L1 se guardan
+bajo `.praeco-demo/l1` (ignorado por git; `PRAECO_FINANCE_DEMO_ROOT` permite otra
+raíz).
+
+Procedencia de las entradas: los bytes de `fixtures/payable-sources/` (`01.pdf`–`08.pdf`,
+`02-context.txt`, `04-context.txt`, `05.txt`) se copiaron byte a byte desde
+`packages/evidence-intelligence/test/fixtures/demo-day/sources/`. No se copian ni
+se leen en runtime archivos de manifiesto o de resultados esperados
+(`index.json` en esa carpeta de fuentes, `original-manifest.json` en el fixture
+demo-day, `test/fixtures/corpus/ground-truth.json`): el runtime deriva cada
+decisión solo de los bytes de entrada. `09-incomplete.txt` es una entrada
+degradada sintética, no una copia.
