@@ -11,6 +11,7 @@ import type {
   FinancialDecisionReference,
   FinancialIntentReference,
   InboundEventReceipt,
+  InboundMessageCommand,
   LinkingChallenge,
   OutboxEvent,
   PayableCase,
@@ -47,6 +48,14 @@ export interface HarnessStore {
   // Linking challenges
   saveLinkingChallenge(challenge: LinkingChallenge): Promise<void>;
   getLinkingChallenge(token: string): Promise<LinkingChallenge | null>;
+  consumeLinkingChallenge(params: {
+    token: string;
+    provider: InboundMessageCommand['provider'];
+    installationId: string;
+    consumedByUserId: string;
+    consumedAt: string;
+    bindingRevision?: string;
+  }): Promise<{ challenge: LinkingChallenge; binding: ExternalPrincipalBinding } | null>;
 
   // Agent principals
   getAgentPrincipal(tenantId: TenantId, principalId: string): Promise<AgentPrincipal | null>;
@@ -61,6 +70,21 @@ export interface HarnessStore {
   ): Promise<InboundEventReceipt | null>;
 
   recordInboundReceipt(receipt: InboundEventReceipt): Promise<void>;
+
+  createInboundAssignment(params: {
+    receipt: InboundEventReceipt;
+    commandReceipt: CommandReceipt;
+    assignment: Assignment;
+    caseData?: PayableCase;
+    threadLink?: {
+      provider: string;
+      installationId: string;
+      threadId: string;
+      caseId: PayableCaseId;
+    };
+    executionEvent: ExecutionEvent;
+    outboxEvent: OutboxEvent;
+  }): Promise<{ assignment: Assignment; isDuplicate: boolean }>;
 
   // Cases & Thread correlations
   getCase(tenantId: TenantId, caseId: PayableCaseId): Promise<PayableCase | null>;
@@ -82,8 +106,10 @@ export interface HarnessStore {
 
   // Assignments
   getAssignment(tenantId: TenantId, assignmentId: AssignmentId): Promise<Assignment | null>;
-  saveAssignment(assignment: Assignment): Promise<void>;
+  saveAssignment(assignment: Assignment, expectedVersion?: number): Promise<void>;
   findAssignmentsByState(tenantId: TenantId, state: AssignmentState): Promise<readonly Assignment[]>;
+  findAssignmentsByCase(tenantId: TenantId, caseId: PayableCaseId): Promise<readonly Assignment[]>;
+  listAssignments(tenantId: TenantId, limit?: number): Promise<readonly Assignment[]>;
 
   // Runs & Checkpoints
   saveRun(run: AgentRun): Promise<void>;
@@ -109,7 +135,9 @@ export interface HarnessStore {
   recordExecutionEvent(event: ExecutionEvent): Promise<void>;
   getExecutionEvents(tenantId: TenantId, aggregateId: string): Promise<readonly ExecutionEvent[]>;
   enqueueOutbox(event: OutboxEvent): Promise<void>;
-  drainOutbox(tenantId: TenantId, limit?: number): Promise<readonly OutboxEvent[]>;
+  drainOutbox(tenantId: TenantId, limit?: number, leaseDurationMs?: number): Promise<readonly OutboxEvent[]>;
+  acknowledgeOutbox(tenantId: TenantId, eventIds: readonly string[]): Promise<void>;
+  failOutboxClaim(tenantId: TenantId, eventIds: readonly string[]): Promise<void>;
 }
 
 export class InMemoryHarnessStore implements HarnessStore {
@@ -204,6 +232,10 @@ export class InMemoryHarnessStore implements HarnessStore {
   }
 
   async saveLinkingChallenge(challenge: LinkingChallenge): Promise<void> {
+    const existing = this.linkingChallenges.get(challenge.token);
+    if (existing && existing.consumedAt && !challenge.consumedAt) {
+      throw new HarnessError('INVALID_STATE', 'Cannot un-consume linking challenge');
+    }
     this.linkingChallenges.set(challenge.token, {
       ...challenge,
       roles: [...challenge.roles],
@@ -214,6 +246,37 @@ export class InMemoryHarnessStore implements HarnessStore {
     const ch = this.linkingChallenges.get(token);
     if (!ch) return null;
     return { ...ch, roles: [...ch.roles] };
+  }
+
+  async consumeLinkingChallenge(params: {
+    token: string;
+    provider: InboundMessageCommand['provider'];
+    installationId: string;
+    consumedByUserId: string;
+    consumedAt: string;
+    bindingRevision?: string;
+  }): Promise<{ challenge: LinkingChallenge; binding: ExternalPrincipalBinding } | null> {
+    const ch = this.linkingChallenges.get(params.token);
+    if (!ch) return null;
+    if (ch.provider !== params.provider || ch.installationId !== params.installationId) return null;
+    if (ch.revokedAt || ch.consumedAt) return null;
+    if (Date.parse(ch.expiresAt) <= Date.parse(params.consumedAt)) return null;
+
+    ch.consumedAt = params.consumedAt;
+    ch.consumedByUserId = params.consumedByUserId;
+
+    const binding: ExternalPrincipalBinding = {
+      tenantId: ch.tenantId,
+      provider: ch.provider,
+      installationId: ch.installationId,
+      providerUserId: params.consumedByUserId,
+      principalId: ch.principalId,
+      roles: [...ch.roles],
+      bindingRevision: params.bindingRevision ?? `rev-${Date.now()}`,
+      revoked: false,
+    };
+    await this.registerPrincipalBinding(binding);
+    return { challenge: { ...ch }, binding };
   }
 
   async getAgentPrincipal(tenantId: TenantId, principalId: string): Promise<AgentPrincipal | null> {
@@ -252,6 +315,80 @@ export class InMemoryHarnessStore implements HarnessStore {
       return;
     }
     this.inboundReceipts.set(key, { ...receipt });
+  }
+
+  async createInboundAssignment(params: {
+    receipt: InboundEventReceipt;
+    commandReceipt: CommandReceipt;
+    assignment: Assignment;
+    caseData?: PayableCase;
+    threadLink?: {
+      provider: string;
+      installationId: string;
+      threadId: string;
+      caseId: PayableCaseId;
+    };
+    executionEvent: ExecutionEvent;
+    outboxEvent: OutboxEvent;
+  }): Promise<{ assignment: Assignment; isDuplicate: boolean }> {
+    const key = this.inboundKey(
+      params.receipt.tenantId,
+      params.receipt.provider,
+      params.receipt.installationId,
+      params.receipt.providerEventId
+    );
+    const existing = this.inboundReceipts.get(key);
+    if (existing) {
+      if (existing.payloadDigest !== params.receipt.payloadDigest) {
+        throw new HarnessError(
+          'CONFLICTING_EVENT_PAYLOAD',
+          `Conflicting payload digest under inbound event ${params.receipt.providerEventId}`
+        );
+      }
+      const existingAssignment = await this.getAssignment(
+        params.receipt.tenantId,
+        existing.assignmentId
+      );
+      if (!existingAssignment) {
+        throw new HarnessError(
+          'CORRUPTED_INBOUND_STATE',
+          `Inbound receipt points to nonexistent assignment ${existing.assignmentId}`
+        );
+      }
+      return { assignment: existingAssignment, isDuplicate: true };
+    }
+
+    if (params.threadLink) {
+      const existingCaseId = await this.findCaseByThread(
+        params.receipt.tenantId,
+        params.threadLink.provider,
+        params.threadLink.installationId,
+        params.threadLink.threadId
+      );
+      if (existingCaseId) {
+        params.assignment.caseId = existingCaseId;
+      } else {
+        await this.linkThreadToCase(
+          params.receipt.tenantId,
+          params.threadLink.provider,
+          params.threadLink.installationId,
+          params.threadLink.threadId,
+          params.threadLink.caseId
+        );
+      }
+    }
+
+    if (params.caseData) {
+      await this.saveCase(params.caseData);
+    }
+
+    await this.saveAssignment(params.assignment, 0);
+    this.inboundReceipts.set(key, { ...params.receipt });
+    await this.saveCommandReceipt(params.commandReceipt);
+    await this.recordExecutionEvent(params.executionEvent);
+    await this.enqueueOutbox(params.outboxEvent);
+
+    return { assignment: { ...params.assignment }, isDuplicate: false };
   }
 
   async getCase(tenantId: TenantId, caseId: PayableCaseId): Promise<PayableCase | null> {
@@ -311,8 +448,24 @@ export class InMemoryHarnessStore implements HarnessStore {
     return a ? { ...a } : null;
   }
 
-  async saveAssignment(assignment: Assignment): Promise<void> {
-    this.assignments.set(this.assignmentKey(assignment.tenantId, assignment.assignmentId), {
+  async saveAssignment(assignment: Assignment, expectedVersion?: number): Promise<void> {
+    const key = this.assignmentKey(assignment.tenantId, assignment.assignmentId);
+    const existing = this.assignments.get(key);
+    if (expectedVersion !== undefined) {
+      const currentVersion = existing?.version ?? 0;
+      if (currentVersion !== expectedVersion) {
+        throw new HarnessError(
+          'CONCURRENT_MODIFICATION',
+          `CAS update failed on assignment ${assignment.assignmentId}: expected version ${expectedVersion}, found ${currentVersion}`
+        );
+      }
+    } else if (!existing && assignment.version > 1) {
+      throw new HarnessError(
+        'CONCURRENT_MODIFICATION',
+        `Cannot update nonexistent assignment ${assignment.assignmentId} with version ${assignment.version}`
+      );
+    }
+    this.assignments.set(key, {
       ...assignment,
     });
   }
@@ -325,6 +478,30 @@ export class InMemoryHarnessStore implements HarnessStore {
     for (const a of this.assignments.values()) {
       if (a.tenantId === tenantId && a.state === state) {
         results.push({ ...a });
+      }
+    }
+    return results;
+  }
+
+  async findAssignmentsByCase(
+    tenantId: TenantId,
+    caseId: PayableCaseId
+  ): Promise<readonly Assignment[]> {
+    const results: Assignment[] = [];
+    for (const a of this.assignments.values()) {
+      if (a.tenantId === tenantId && a.caseId === caseId) {
+        results.push({ ...a });
+      }
+    }
+    return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async listAssignments(tenantId: TenantId, limit = 50): Promise<readonly Assignment[]> {
+    const results: Assignment[] = [];
+    for (const a of this.assignments.values()) {
+      if (a.tenantId === tenantId) {
+        results.push({ ...a });
+        if (results.length >= limit) break;
       }
     }
     return results;
@@ -381,11 +558,17 @@ export class InMemoryHarnessStore implements HarnessStore {
   }
 
   async saveFinancialIntent(intent: FinancialIntentReference): Promise<void> {
-    this.financialIntents.set(intent.intentId, { ...intent, envelopeIds: [...intent.envelopeIds] });
+    if (!intent.tenantId) {
+      throw new HarnessError('MISSING_TENANT_ID', 'FinancialIntentReference requires tenantId');
+    }
+    this.financialIntents.set(`${intent.tenantId}:${intent.intentId}`, {
+      ...intent,
+      envelopeIds: [...intent.envelopeIds],
+    });
   }
 
-  async getFinancialIntent(_tenantId: TenantId, intentId: string): Promise<FinancialIntentReference | null> {
-    const intent = this.financialIntents.get(intentId);
+  async getFinancialIntent(tenantId: TenantId, intentId: string): Promise<FinancialIntentReference | null> {
+    const intent = this.financialIntents.get(`${tenantId}:${intentId}`);
     if (!intent) return null;
     return { ...intent, envelopeIds: [...intent.envelopeIds] };
   }
@@ -417,16 +600,47 @@ export class InMemoryHarnessStore implements HarnessStore {
     this.outboxEvents.push({ ...event });
   }
 
-  async drainOutbox(tenantId: TenantId, limit = 50): Promise<readonly OutboxEvent[]> {
-    const now = new Date().toISOString();
+  async drainOutbox(
+    tenantId: TenantId,
+    limit = 50,
+    leaseDurationMs = 60_000
+  ): Promise<readonly OutboxEvent[]> {
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const leaseExpiresIso = new Date(nowMs + leaseDurationMs).toISOString();
     const drained: OutboxEvent[] = [];
+
     for (const evt of this.outboxEvents) {
       if (evt.tenantId === tenantId && !evt.dispatchedAt) {
-        evt.dispatchedAt = now;
-        drained.push({ ...evt });
-        if (drained.length >= limit) break;
+        const isExpired = evt.claimExpiresAt ? Date.parse(evt.claimExpiresAt) <= nowMs : true;
+        if (isExpired) {
+          evt.claimedAt = nowIso;
+          evt.claimExpiresAt = leaseExpiresIso;
+          drained.push({ ...evt });
+          if (drained.length >= limit) break;
+        }
       }
     }
     return drained;
+  }
+
+  async acknowledgeOutbox(tenantId: TenantId, eventIds: readonly string[]): Promise<void> {
+    const now = new Date().toISOString();
+    const idSet = new Set(eventIds);
+    for (const evt of this.outboxEvents) {
+      if (evt.tenantId === tenantId && idSet.has(evt.eventId)) {
+        evt.dispatchedAt = now;
+      }
+    }
+  }
+
+  async failOutboxClaim(tenantId: TenantId, eventIds: readonly string[]): Promise<void> {
+    const idSet = new Set(eventIds);
+    for (const evt of this.outboxEvents) {
+      if (evt.tenantId === tenantId && idSet.has(evt.eventId)) {
+        delete evt.claimedAt;
+        delete evt.claimExpiresAt;
+      }
+    }
   }
 }

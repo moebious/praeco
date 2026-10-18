@@ -108,6 +108,7 @@ export function createNovaTools(options: NovaToolsOptions): SpecialistToolDefini
 
       const intentId = `intent-${randomUUID()}`;
       const intent = {
+        tenantId,
         intentId,
         assignmentId: context.assignmentId,
         caseId: params.caseId,

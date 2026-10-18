@@ -5,7 +5,13 @@ import type {
   AssignmentPort,
   AssignmentState,
   CheckpointStage,
+  CommandReceipt,
+  ExecutionEvent,
+  InboundEventReceipt,
   InboundMessageCommand,
+  OutboxEvent,
+  PayableCase,
+  PayableCaseId,
   SpecialistRole,
   TrustedExecutionContext,
   TrustedPrincipal,
@@ -85,21 +91,30 @@ export class AssignmentService implements AssignmentPort {
       input.providerThreadId
     );
 
+    let caseData: PayableCase | undefined;
+    let threadLink:
+      | {
+          provider: string;
+          installationId: string;
+          threadId: string;
+          caseId: PayableCaseId;
+        }
+      | undefined;
+
     if (!caseId) {
       caseId = `case-${randomUUID()}`;
-      await this.store.saveCase({
+      caseData = {
         caseId,
         tenantId,
         sourceLinks: [],
         version: 1,
-      });
-      await this.store.linkThreadToCase(
-        tenantId,
-        input.provider,
-        input.installationId,
-        input.providerThreadId,
-        caseId
-      );
+      };
+      threadLink = {
+        provider: input.provider,
+        installationId: input.installationId,
+        threadId: input.providerThreadId,
+        caseId,
+      };
     }
 
     // 4. Create fresh Assignment
@@ -118,10 +133,7 @@ export class AssignmentService implements AssignmentPort {
       updatedAt: now,
     };
 
-    // 5. Atomic-equivalent persistence of receipt, assignment, command receipt and outbox event
-    await this.store.saveAssignment(assignment);
-
-    await this.store.recordInboundReceipt({
+    const receipt: InboundEventReceipt = {
       receiptId: `rcpt-${randomUUID()}`,
       tenantId,
       provider: input.provider,
@@ -130,9 +142,9 @@ export class AssignmentService implements AssignmentPort {
       payloadDigest: computedDigest,
       assignmentId,
       createdAt: now,
-    });
+    };
 
-    await this.store.saveCommandReceipt({
+    const commandReceipt: CommandReceipt = {
       commandReceiptId: `cmd-${randomUUID()}`,
       tenantId,
       scope: 'INBOUND_MESSAGE',
@@ -140,9 +152,9 @@ export class AssignmentService implements AssignmentPort {
       payloadDigest: computedDigest,
       resultRef: assignmentId,
       createdAt: now,
-    });
+    };
 
-    await this.store.recordExecutionEvent({
+    const executionEvent: ExecutionEvent = {
       eventId: `evt-${randomUUID()}`,
       tenantId,
       aggregateId: assignmentId,
@@ -150,9 +162,9 @@ export class AssignmentService implements AssignmentPort {
       eventType: 'ASSIGNMENT_CREATED',
       commandId: input.providerEventId,
       occurredAt: now,
-    });
+    };
 
-    await this.store.enqueueOutbox({
+    const outboxEvent: OutboxEvent = {
       eventId: `out-${randomUUID()}`,
       tenantId,
       installationId: input.installationId,
@@ -165,9 +177,18 @@ export class AssignmentService implements AssignmentPort {
         threadId: input.providerThreadId,
       },
       occurredAt: now,
-    });
+    };
 
-    return { assignment, isDuplicate: false };
+    // 5. Transactional persistence covering inbound claiming, case/assignment, receipts and outbox
+    return this.store.createInboundAssignment({
+      receipt,
+      commandReceipt,
+      assignment,
+      caseData,
+      threadLink,
+      executionEvent,
+      outboxEvent,
+    });
   }
 
   async claimRun(
@@ -216,7 +237,7 @@ export class AssignmentService implements AssignmentPort {
       updatedAt: now,
     };
 
-    await this.store.saveAssignment(updated);
+    await this.store.saveAssignment(updated, assignment.version);
 
     await this.store.recordExecutionEvent({
       eventId: `evt-${randomUUID()}`,
@@ -279,7 +300,7 @@ export class AssignmentService implements AssignmentPort {
       updatedAt: now,
     };
 
-    await this.store.saveAssignment(updated);
+    await this.store.saveAssignment(updated, input.expectedVersion);
 
     if (input.checkpointStage) {
       await this.store.saveCheckpoint({

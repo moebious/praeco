@@ -15,6 +15,7 @@ import type {
   FinancialIntentReference,
   FinancialOutcome,
   InboundEventReceipt,
+  InboundMessageCommand,
   LinkingChallenge,
   OutboxEvent,
   PayableCase,
@@ -23,6 +24,7 @@ import type {
   TenantId,
 } from './types.js';
 import type { HarnessStore } from './store.js';
+import { HarnessError } from './state-machine.js';
 
 const { Pool } = pg;
 
@@ -197,16 +199,21 @@ CREATE INDEX IF NOT EXISTS idx_harness_execution_events_agg
   ON harness_execution_events (tenant_id, aggregate_id, aggregate_version);
 
 CREATE TABLE IF NOT EXISTS harness_outbox_events (
-  tenant_id       TEXT NOT NULL,
-  event_id        TEXT NOT NULL,
-  installation_id TEXT,
-  event_type      TEXT NOT NULL,
-  command_id      TEXT NOT NULL,
-  payload         JSONB NOT NULL,
-  occurred_at     TIMESTAMPTZ NOT NULL,
-  dispatched_at   TIMESTAMPTZ,
+  tenant_id        TEXT NOT NULL,
+  event_id         TEXT NOT NULL,
+  installation_id  TEXT,
+  event_type       TEXT NOT NULL,
+  command_id       TEXT NOT NULL,
+  payload          JSONB NOT NULL,
+  occurred_at      TIMESTAMPTZ NOT NULL,
+  claimed_at       TIMESTAMPTZ,
+  claim_expires_at TIMESTAMPTZ,
+  dispatched_at    TIMESTAMPTZ,
   PRIMARY KEY (tenant_id, event_id)
 );
+
+ALTER TABLE harness_outbox_events ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+ALTER TABLE harness_outbox_events ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_harness_outbox_undispatched
   ON harness_outbox_events (tenant_id, occurred_at) WHERE dispatched_at IS NULL;
@@ -352,9 +359,9 @@ export class SqlHarnessStore implements HarnessStore {
         (token, tenant_id, principal_id, roles, provider, installation_id, expires_at, consumed_at, consumed_by_user_id, revoked_at)
        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (token) DO UPDATE SET
-        consumed_at = EXCLUDED.consumed_at,
-        consumed_by_user_id = EXCLUDED.consumed_by_user_id,
-        revoked_at = EXCLUDED.revoked_at`,
+        consumed_at = COALESCE(harness_linking_challenges.consumed_at, EXCLUDED.consumed_at),
+        consumed_by_user_id = COALESCE(harness_linking_challenges.consumed_by_user_id, EXCLUDED.consumed_by_user_id),
+        revoked_at = COALESCE(harness_linking_challenges.revoked_at, EXCLUDED.revoked_at)`,
       [
         challenge.token,
         challenge.tenantId,
@@ -389,6 +396,99 @@ export class SqlHarnessStore implements HarnessStore {
       consumedByUserId: row.consumed_by_user_id ?? undefined,
       revokedAt: toNullableIsoString(row.revoked_at),
     };
+  }
+
+  async consumeLinkingChallenge(params: {
+    token: string;
+    provider: InboundMessageCommand['provider'];
+    installationId: string;
+    consumedByUserId: string;
+    consumedAt: string;
+    bindingRevision?: string;
+  }): Promise<{ challenge: LinkingChallenge; binding: ExternalPrincipalBinding } | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const updateRes = await client.query(
+        `UPDATE harness_linking_challenges
+         SET consumed_at = $1, consumed_by_user_id = $2
+         WHERE token = $3
+           AND provider = $4
+           AND installation_id = $5
+           AND consumed_at IS NULL
+           AND revoked_at IS NULL
+           AND expires_at > $1
+         RETURNING *`,
+        [
+          params.consumedAt,
+          params.consumedByUserId,
+          params.token,
+          params.provider,
+          params.installationId,
+        ]
+      );
+
+      if (updateRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+
+      const row = updateRes.rows[0];
+      const challenge: LinkingChallenge = {
+        token: row.token,
+        tenantId: row.tenant_id,
+        principalId: row.principal_id,
+        roles: Array.isArray(row.roles) ? row.roles : JSON.parse(row.roles),
+        provider: row.provider,
+        installationId: row.installation_id,
+        expiresAt: toIsoString(row.expires_at),
+        consumedAt: toNullableIsoString(row.consumed_at),
+        consumedByUserId: row.consumed_by_user_id ?? undefined,
+        revokedAt: toNullableIsoString(row.revoked_at),
+      };
+
+      const bindingRevision = params.bindingRevision ?? `rev-${Date.now()}`;
+      await client.query(
+        `INSERT INTO harness_principal_bindings
+          (tenant_id, provider, installation_id, provider_user_id, principal_id, roles, binding_revision, revoked)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, false)
+         ON CONFLICT (tenant_id, provider, installation_id, provider_user_id)
+         DO UPDATE SET
+           principal_id = EXCLUDED.principal_id,
+           roles = EXCLUDED.roles,
+           binding_revision = EXCLUDED.binding_revision,
+           revoked = false`,
+        [
+          challenge.tenantId,
+          challenge.provider,
+          challenge.installationId,
+          params.consumedByUserId,
+          challenge.principalId,
+          JSON.stringify(challenge.roles),
+          bindingRevision,
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      const binding: ExternalPrincipalBinding = {
+        tenantId: challenge.tenantId,
+        provider: challenge.provider,
+        installationId: challenge.installationId,
+        providerUserId: params.consumedByUserId,
+        principalId: challenge.principalId,
+        roles: [...challenge.roles],
+        bindingRevision,
+        revoked: false,
+      };
+
+      return { challenge, binding };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -446,11 +546,13 @@ export class SqlHarnessStore implements HarnessStore {
   }
 
   async recordInboundReceipt(receipt: InboundEventReceipt): Promise<void> {
-    await this.pool.query(
+    const res = await this.pool.query(
       `INSERT INTO harness_inbound_receipts
         (receipt_id, tenant_id, provider, installation_id, provider_event_id, payload_digest, assignment_id, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (tenant_id, provider, installation_id, provider_event_id) DO NOTHING`,
+       ON CONFLICT (tenant_id, provider, installation_id, provider_event_id)
+       DO UPDATE SET payload_digest = harness_inbound_receipts.payload_digest
+       RETURNING payload_digest, assignment_id`,
       [
         receipt.receiptId,
         receipt.tenantId,
@@ -462,6 +564,250 @@ export class SqlHarnessStore implements HarnessStore {
         receipt.createdAt,
       ]
     );
+
+    if (res.rowCount && res.rows[0].payload_digest !== receipt.payloadDigest) {
+      throw new HarnessError(
+        'CONFLICTING_EVENT_PAYLOAD',
+        `Conflicting payload digest under existing inbound event ${receipt.providerEventId}`
+      );
+    }
+  }
+
+  async createInboundAssignment(params: {
+    receipt: InboundEventReceipt;
+    commandReceipt: CommandReceipt;
+    assignment: Assignment;
+    caseData?: PayableCase;
+    threadLink?: {
+      provider: string;
+      installationId: string;
+      threadId: string;
+      caseId: PayableCaseId;
+    };
+    executionEvent: ExecutionEvent;
+    outboxEvent: OutboxEvent;
+  }): Promise<{ assignment: Assignment; isDuplicate: boolean }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Check existing inbound receipt with FOR UPDATE to serialize concurrent deliveries
+      const existingReceiptRes = await client.query(
+        `SELECT receipt_id, payload_digest, assignment_id
+         FROM harness_inbound_receipts
+         WHERE tenant_id = $1 AND provider = $2 AND installation_id = $3 AND provider_event_id = $4
+         FOR UPDATE`,
+        [
+          params.receipt.tenantId,
+          params.receipt.provider,
+          params.receipt.installationId,
+          params.receipt.providerEventId,
+        ]
+      );
+
+      if (existingReceiptRes.rowCount && existingReceiptRes.rowCount > 0) {
+        const existingRow = existingReceiptRes.rows[0];
+        if (existingRow.payload_digest !== params.receipt.payloadDigest) {
+          await client.query('ROLLBACK');
+          throw new HarnessError(
+            'CONFLICTING_EVENT_PAYLOAD',
+            `Conflicting payload digest under existing inbound event ${params.receipt.providerEventId}`
+          );
+        }
+
+        const existingAssignmentRes = await client.query(
+          `SELECT * FROM harness_assignments WHERE tenant_id = $1 AND assignment_id = $2`,
+          [params.receipt.tenantId, existingRow.assignment_id]
+        );
+
+        await client.query('COMMIT');
+
+        if (!existingAssignmentRes.rowCount || existingAssignmentRes.rowCount === 0) {
+          throw new HarnessError(
+            'CORRUPTED_INBOUND_STATE',
+            `Inbound receipt points to nonexistent assignment ${existingRow.assignment_id}`
+          );
+        }
+
+        return {
+          assignment: this.mapAssignmentRow(existingAssignmentRes.rows[0]),
+          isDuplicate: true,
+        };
+      }
+
+      // 2. Thread linking & case creation
+      if (params.threadLink) {
+        const threadRes = await client.query(
+          `SELECT case_id FROM harness_thread_case_links
+           WHERE tenant_id = $1 AND provider = $2 AND installation_id = $3 AND thread_id = $4
+           FOR UPDATE`,
+          [
+            params.receipt.tenantId,
+            params.threadLink.provider,
+            params.threadLink.installationId,
+            params.threadLink.threadId,
+          ]
+        );
+        if (threadRes.rowCount && threadRes.rowCount > 0) {
+          params.assignment.caseId = threadRes.rows[0].case_id;
+        } else {
+          await client.query(
+            `INSERT INTO harness_thread_case_links (tenant_id, provider, installation_id, thread_id, case_id)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (tenant_id, provider, installation_id, thread_id) DO NOTHING`,
+            [
+              params.receipt.tenantId,
+              params.threadLink.provider,
+              params.threadLink.installationId,
+              params.threadLink.threadId,
+              params.threadLink.caseId,
+            ]
+          );
+        }
+      }
+
+      if (params.caseData) {
+        await client.query(
+          `INSERT INTO harness_cases (tenant_id, case_id, source_links, version)
+           VALUES ($1, $2, $3::jsonb, $4)
+           ON CONFLICT (tenant_id, case_id) DO NOTHING`,
+          [
+            params.caseData.tenantId,
+            params.caseData.caseId,
+            JSON.stringify(params.caseData.sourceLinks),
+            params.caseData.version,
+          ]
+        );
+      }
+
+      // 3. Insert assignment
+      await client.query(
+        `INSERT INTO harness_assignments
+          (tenant_id, assignment_id, case_id, agent_principal_id, requested_by_principal_id, state, version,
+           active_run_id, ownership_epoch, cancellation_requested_at, pending_financial_intent_id,
+           initial_l2_decision_id, latest_l2_decision_id, l2_approval_request_id, trigger_wait_token,
+           created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+        [
+          params.assignment.tenantId,
+          params.assignment.assignmentId,
+          params.assignment.caseId,
+          params.assignment.agentPrincipalId,
+          params.assignment.requestedByPrincipalId,
+          params.assignment.state,
+          params.assignment.version,
+          params.assignment.activeRunId ?? null,
+          params.assignment.ownershipEpoch,
+          params.assignment.cancellationRequestedAt ?? null,
+          params.assignment.pendingFinancialIntentId ?? null,
+          params.assignment.initialL2DecisionId ?? null,
+          params.assignment.latestL2DecisionId ?? null,
+          params.assignment.l2ApprovalRequestId ?? null,
+          params.assignment.triggerWaitToken ?? null,
+          params.assignment.createdAt,
+          params.assignment.updatedAt,
+        ]
+      );
+
+      // 4. Insert inbound receipt
+      await client.query(
+        `INSERT INTO harness_inbound_receipts
+          (receipt_id, tenant_id, provider, installation_id, provider_event_id, payload_digest, assignment_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          params.receipt.receiptId,
+          params.receipt.tenantId,
+          params.receipt.provider,
+          params.receipt.installationId,
+          params.receipt.providerEventId,
+          params.receipt.payloadDigest,
+          params.receipt.assignmentId,
+          params.receipt.createdAt,
+        ]
+      );
+
+      // 5. Insert command receipt
+      await client.query(
+        `INSERT INTO harness_command_receipts
+          (tenant_id, scope, command_key, command_receipt_id, payload_digest, result_ref, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (tenant_id, scope, command_key) DO NOTHING`,
+        [
+          params.commandReceipt.tenantId,
+          params.commandReceipt.scope,
+          params.commandReceipt.commandKey,
+          params.commandReceipt.commandReceiptId,
+          params.commandReceipt.payloadDigest,
+          params.commandReceipt.resultRef,
+          params.commandReceipt.createdAt,
+        ]
+      );
+
+      // 6. Record execution event
+      await client.query(
+        `INSERT INTO harness_execution_events
+          (tenant_id, event_id, aggregate_id, aggregate_version, event_type, command_id, causation_id, payload_ref, occurred_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          params.executionEvent.tenantId,
+          params.executionEvent.eventId,
+          params.executionEvent.aggregateId,
+          params.executionEvent.aggregateVersion,
+          params.executionEvent.eventType,
+          params.executionEvent.commandId,
+          params.executionEvent.causationId ?? null,
+          params.executionEvent.payloadRef ?? null,
+          params.executionEvent.occurredAt,
+        ]
+      );
+
+      // 7. Enqueue outbox
+      await client.query(
+        `INSERT INTO harness_outbox_events
+          (tenant_id, event_id, installation_id, event_type, command_id, payload, occurred_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+        [
+          params.outboxEvent.tenantId,
+          params.outboxEvent.eventId,
+          params.outboxEvent.installationId ?? null,
+          params.outboxEvent.eventType,
+          params.outboxEvent.commandId,
+          JSON.stringify(params.outboxEvent.payload),
+          params.outboxEvent.occurredAt,
+        ]
+      );
+
+      await client.query('COMMIT');
+      return { assignment: params.assignment, isDuplicate: false };
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      if (err?.code === '23505') {
+        const existing = await this.getInboundReceipt(
+          params.receipt.tenantId,
+          params.receipt.provider,
+          params.receipt.installationId,
+          params.receipt.providerEventId
+        );
+        if (existing) {
+          if (existing.payloadDigest !== params.receipt.payloadDigest) {
+            throw new HarnessError(
+              'CONFLICTING_EVENT_PAYLOAD',
+              `Conflicting payload digest under existing inbound event ${params.receipt.providerEventId}`
+            );
+          }
+          const winningAssignment = await this.getAssignment(
+            params.receipt.tenantId,
+            existing.assignmentId
+          );
+          if (winningAssignment) {
+            return { assignment: winningAssignment, isDuplicate: true };
+          }
+        }
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -498,17 +844,24 @@ export class SqlHarnessStore implements HarnessStore {
     caseId: PayableCaseId,
     link: CaseSourceLink
   ): Promise<PayableCase> {
-    const existing = await this.getCase(tenantId, caseId);
-    const updatedLinks = existing ? [...existing.sourceLinks, link] : [link];
-    const newVersion = existing ? existing.version + 1 : 1;
-    const updatedCase: PayableCase = {
-      caseId,
-      tenantId,
-      sourceLinks: updatedLinks,
-      version: newVersion,
+    const res = await this.pool.query(
+      `INSERT INTO harness_cases (tenant_id, case_id, source_links, version)
+       VALUES ($1, $2, jsonb_build_array($3::jsonb), 1)
+       ON CONFLICT (tenant_id, case_id)
+       DO UPDATE SET
+         source_links = harness_cases.source_links || jsonb_build_array($3::jsonb),
+         version = harness_cases.version + 1
+       RETURNING tenant_id, case_id, source_links, version`,
+      [tenantId, caseId, JSON.stringify(link)]
+    );
+
+    const row = res.rows[0];
+    return {
+      caseId: row.case_id,
+      tenantId: row.tenant_id,
+      sourceLinks: Array.isArray(row.source_links) ? row.source_links : JSON.parse(row.source_links),
+      version: Number(row.version),
     };
-    await this.saveCase(updatedCase);
-    return updatedCase;
   }
 
   async findCaseByThread(
@@ -554,29 +907,64 @@ export class SqlHarnessStore implements HarnessStore {
     return this.mapAssignmentRow(res.rows[0]);
   }
 
-  async saveAssignment(assignment: Assignment): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO harness_assignments
-        (tenant_id, assignment_id, case_id, agent_principal_id, requested_by_principal_id, state, version,
-         active_run_id, ownership_epoch, cancellation_requested_at, pending_financial_intent_id,
-         initial_l2_decision_id, latest_l2_decision_id, l2_approval_request_id, trigger_wait_token,
-         created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-       ON CONFLICT (tenant_id, assignment_id) DO UPDATE SET
-        case_id = EXCLUDED.case_id,
-        agent_principal_id = EXCLUDED.agent_principal_id,
-        requested_by_principal_id = EXCLUDED.requested_by_principal_id,
-        state = EXCLUDED.state,
-        version = EXCLUDED.version,
-        active_run_id = EXCLUDED.active_run_id,
-        ownership_epoch = EXCLUDED.ownership_epoch,
-        cancellation_requested_at = EXCLUDED.cancellation_requested_at,
-        pending_financial_intent_id = EXCLUDED.pending_financial_intent_id,
-        initial_l2_decision_id = EXCLUDED.initial_l2_decision_id,
-        latest_l2_decision_id = EXCLUDED.latest_l2_decision_id,
-        l2_approval_request_id = EXCLUDED.l2_approval_request_id,
-        trigger_wait_token = EXCLUDED.trigger_wait_token,
-        updated_at = EXCLUDED.updated_at`,
+  async saveAssignment(assignment: Assignment, expectedVersion?: number): Promise<void> {
+    if (expectedVersion === 0 || (expectedVersion === undefined && assignment.version === 1)) {
+      const res = await this.pool.query(
+        `INSERT INTO harness_assignments
+          (tenant_id, assignment_id, case_id, agent_principal_id, requested_by_principal_id, state, version,
+           active_run_id, ownership_epoch, cancellation_requested_at, pending_financial_intent_id,
+           initial_l2_decision_id, latest_l2_decision_id, l2_approval_request_id, trigger_wait_token,
+           created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         ON CONFLICT (tenant_id, assignment_id) DO NOTHING`,
+        [
+          assignment.tenantId,
+          assignment.assignmentId,
+          assignment.caseId,
+          assignment.agentPrincipalId,
+          assignment.requestedByPrincipalId,
+          assignment.state,
+          assignment.version,
+          assignment.activeRunId ?? null,
+          assignment.ownershipEpoch,
+          assignment.cancellationRequestedAt ?? null,
+          assignment.pendingFinancialIntentId ?? null,
+          assignment.initialL2DecisionId ?? null,
+          assignment.latestL2DecisionId ?? null,
+          assignment.l2ApprovalRequestId ?? null,
+          assignment.triggerWaitToken ?? null,
+          assignment.createdAt,
+          assignment.updatedAt,
+        ]
+      );
+      if (res.rowCount === 0) {
+        throw new HarnessError(
+          'CONCURRENT_MODIFICATION',
+          `Assignment ${assignment.assignmentId} already exists in tenant ${assignment.tenantId}`
+        );
+      }
+      return;
+    }
+
+    const targetExpectedVersion = expectedVersion !== undefined ? expectedVersion : assignment.version - 1;
+    const res = await this.pool.query(
+      `UPDATE harness_assignments
+       SET
+         case_id = $3,
+         agent_principal_id = $4,
+         requested_by_principal_id = $5,
+         state = $6,
+         version = $7,
+         active_run_id = $8,
+         ownership_epoch = $9,
+         cancellation_requested_at = $10,
+         pending_financial_intent_id = $11,
+         initial_l2_decision_id = $12,
+         latest_l2_decision_id = $13,
+         l2_approval_request_id = $14,
+         trigger_wait_token = $15,
+         updated_at = $16
+       WHERE tenant_id = $1 AND assignment_id = $2 AND version = $17`,
       [
         assignment.tenantId,
         assignment.assignmentId,
@@ -593,10 +981,17 @@ export class SqlHarnessStore implements HarnessStore {
         assignment.latestL2DecisionId ?? null,
         assignment.l2ApprovalRequestId ?? null,
         assignment.triggerWaitToken ?? null,
-        assignment.createdAt,
         assignment.updatedAt,
+        targetExpectedVersion,
       ]
     );
+
+    if (res.rowCount === 0) {
+      throw new HarnessError(
+        'CONCURRENT_MODIFICATION',
+        `CAS update failed on assignment ${assignment.assignmentId}: expected version ${targetExpectedVersion}`
+      );
+    }
   }
 
   async findAssignmentsByState(tenantId: TenantId, state: AssignmentState): Promise<readonly Assignment[]> {
@@ -605,6 +1000,30 @@ export class SqlHarnessStore implements HarnessStore {
        WHERE tenant_id = $1 AND state = $2
        ORDER BY created_at ASC`,
       [tenantId, state]
+    );
+    return res.rows.map((row) => this.mapAssignmentRow(row));
+  }
+
+  async findAssignmentsByCase(
+    tenantId: TenantId,
+    caseId: PayableCaseId
+  ): Promise<readonly Assignment[]> {
+    const res = await this.pool.query(
+      `SELECT * FROM harness_assignments
+       WHERE tenant_id = $1 AND case_id = $2
+       ORDER BY created_at ASC`,
+      [tenantId, caseId]
+    );
+    return res.rows.map((row) => this.mapAssignmentRow(row));
+  }
+
+  async listAssignments(tenantId: TenantId, limit = 50): Promise<readonly Assignment[]> {
+    const res = await this.pool.query(
+      `SELECT * FROM harness_assignments
+       WHERE tenant_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [tenantId, limit]
     );
     return res.rows.map((row) => this.mapAssignmentRow(row));
   }
@@ -766,6 +1185,9 @@ export class SqlHarnessStore implements HarnessStore {
   // Financial intent & decision references
   // ─────────────────────────────────────────────────────────────────────────────
   async saveFinancialIntent(intent: FinancialIntentReference): Promise<void> {
+    if (!intent.tenantId) {
+      throw new HarnessError('MISSING_TENANT_ID', 'FinancialIntentReference requires tenantId');
+    }
     await this.pool.query(
       `INSERT INTO harness_financial_intents
         (tenant_id, intent_id, assignment_id, case_id, case_version, requested_by_principal_id,
@@ -773,7 +1195,7 @@ export class SqlHarnessStore implements HarnessStore {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
        ON CONFLICT (tenant_id, intent_id) DO NOTHING`,
       [
-        (intent as any).tenantId ?? 'default-tenant',
+        intent.tenantId,
         intent.intentId,
         intent.assignmentId,
         intent.caseId,
@@ -790,12 +1212,13 @@ export class SqlHarnessStore implements HarnessStore {
 
   async getFinancialIntent(tenantId: TenantId, intentId: string): Promise<FinancialIntentReference | null> {
     const res = await this.pool.query(
-      `SELECT * FROM harness_financial_intents WHERE (tenant_id = $1 OR tenant_id = 'default-tenant') AND intent_id = $2`,
+      `SELECT * FROM harness_financial_intents WHERE tenant_id = $1 AND intent_id = $2`,
       [tenantId, intentId]
     );
     if (res.rowCount === 0) return null;
     const row = res.rows[0];
     return {
+      tenantId: row.tenant_id,
       intentId: row.intent_id,
       assignmentId: row.assignment_id,
       caseId: row.case_id,
@@ -905,22 +1328,31 @@ export class SqlHarnessStore implements HarnessStore {
     );
   }
 
-  async drainOutbox(tenantId: TenantId, limit = 50): Promise<readonly OutboxEvent[]> {
-    const now = new Date().toISOString();
-    // PostgreSQL FOR UPDATE SKIP LOCKED ensures lock-free concurrent draining across workers
+  async drainOutbox(
+    tenantId: TenantId,
+    limit = 50,
+    leaseDurationMs = 60_000
+  ): Promise<readonly OutboxEvent[]> {
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const leaseExpiresIso = new Date(nowMs + leaseDurationMs).toISOString();
+
+    // Lease candidate events using FOR UPDATE SKIP LOCKED
     const res = await this.pool.query(
       `WITH to_drain AS (
          SELECT event_id FROM harness_outbox_events
-         WHERE tenant_id = $1 AND dispatched_at IS NULL
+         WHERE tenant_id = $1
+           AND dispatched_at IS NULL
+           AND (claim_expires_at IS NULL OR claim_expires_at <= $2)
          ORDER BY occurred_at ASC
-         LIMIT $2
+         LIMIT $3
          FOR UPDATE SKIP LOCKED
        )
        UPDATE harness_outbox_events
-       SET dispatched_at = $3
+       SET claimed_at = $2, claim_expires_at = $4
        WHERE tenant_id = $1 AND event_id IN (SELECT event_id FROM to_drain)
        RETURNING *`,
-      [tenantId, limit, now]
+      [tenantId, nowIso, limit, leaseExpiresIso]
     );
 
     return res.rows.map((row) => ({
@@ -931,7 +1363,30 @@ export class SqlHarnessStore implements HarnessStore {
       commandId: row.command_id,
       payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
       occurredAt: toIsoString(row.occurred_at),
+      claimedAt: toNullableIsoString(row.claimed_at),
+      claimExpiresAt: toNullableIsoString(row.claim_expires_at),
       dispatchedAt: toNullableIsoString(row.dispatched_at),
     }));
+  }
+
+  async acknowledgeOutbox(tenantId: TenantId, eventIds: readonly string[]): Promise<void> {
+    if (eventIds.length === 0) return;
+    const now = new Date().toISOString();
+    await this.pool.query(
+      `UPDATE harness_outbox_events
+       SET dispatched_at = $1
+       WHERE tenant_id = $2 AND event_id = ANY($3)`,
+      [now, tenantId, eventIds]
+    );
+  }
+
+  async failOutboxClaim(tenantId: TenantId, eventIds: readonly string[]): Promise<void> {
+    if (eventIds.length === 0) return;
+    await this.pool.query(
+      `UPDATE harness_outbox_events
+       SET claimed_at = NULL, claim_expires_at = NULL
+       WHERE tenant_id = $1 AND event_id = ANY($2)`,
+      [tenantId, eventIds]
+    );
   }
 }
