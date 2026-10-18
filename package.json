@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "apps/*"],
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -17,9 +17,9 @@
     "l1:evaluate": "npm run evaluate --workspace @praeco/evidence-intelligence",
     "l1:smoke": "npm run smoke --workspace @praeco/evidence-intelligence",
     "l2:demo": "npm run demo --workspace @praeco/financial-decision-kernel",
-    "l2:web": "npm run web --workspace @praeco/financial-decision-kernel",
+    "l2:web": "npm run web --workspace @praeco/finance-dashboard",
     "demo": "npm run demo --workspace @praeco/financial-decision-kernel",
-    "web": "npm run web --workspace @praeco/financial-decision-kernel",
+    "web": "npm run web --workspace @praeco/finance-dashboard",
     "check": "npm run typecheck && npm test && npm run build"
   }
 }

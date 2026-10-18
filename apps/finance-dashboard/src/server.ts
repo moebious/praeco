@@ -3,13 +3,13 @@ import {
   createScenarioStore,
   FinancialAuthorizationService,
   DEMO_TENANT_ID,
+  buildScenarios,
+  decimal,
   type EnvelopeResolver,
   type ReadyInvoiceEnvelope,
   type TrustedActorContext,
-} from '../index.js';
-import { decimal } from '../decimal.js';
+} from '@praeco/financial-decision-kernel';
 import { renderDashboardHtml } from './html.js';
-import { buildScenarios } from '../cli.js';
 
 class WebEnvelopeResolver implements EnvelopeResolver {
   private readonly store = new Map<string, ReadyInvoiceEnvelope>();

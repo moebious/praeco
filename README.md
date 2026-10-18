@@ -25,7 +25,7 @@ Eight synthetic payable scenarios cover two automatic simulated authorizations, 
 ### Repository layout
 
 ```text
-apps/              # UI and API entrypoints (to be implemented)
+apps/              # Finance operations dashboard (serves the L2 inspector UI)
 packages/          # L1 evidence intelligence, external intake, and the L2 decision kernel
 integrations/      # AgentMail, Daytona and other adapters (as needed)
 demo/              # Synthetic AP environment, replay, evaluation
