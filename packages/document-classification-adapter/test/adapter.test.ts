@@ -155,7 +155,9 @@ describe('typed validation of DocJev split results', () => {
   });
 });
 
-describe('bounded DocJev process bridge (scripted stand-ins, offline)', () => {
+// Let the bridge enforce its 15s process deadline before the test runner aborts.
+// The explicit 200ms cancellation case below keeps the runtime bound verified.
+describe('bounded DocJev process bridge (scripted stand-ins, offline)', { timeout: 20_000 }, () => {
   const base = { documentPath: 'x.pdf', rulesPath: 'r.yaml' };
 
   it('maps valid JSON from the bridge into a typed packet via classifyDocumentPacket', async () => {
