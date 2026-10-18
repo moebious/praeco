@@ -200,4 +200,33 @@ describe('L2 correctness regressions — G2 classification, budget staleness, ve
     const g3 = record.gateChecks.find(c => c.gate === 'G3');
     expect(g3?.code).toBe('VENDOR_DIRECTORY_AMBIGUOUS');
   });
+
+  it('records the resolving decision id on the approval request, for both approve and reject', async () => {
+    const { service, store, record } = await createPendingApproval();
+
+    const approvalRecord = await service.resolveApproval(
+      {
+        approvalRequestId: record.approvalRequestId!,
+        idempotencyKey: 'idem-res-ref-approve',
+        action: 'APPROVE',
+      },
+      actorCFO
+    );
+    const request = store.approvalRequests.get(record.approvalRequestId!)!;
+    expect(request.resolvedDecisionId).toBe(approvalRecord.decisionId);
+    expect(request.resolvedDecisionId).not.toBe(request.decisionId);
+
+    const { service: service2, store: store2, record: record2 } = await createPendingApproval();
+    const rejectRecord = await service2.resolveApproval(
+      {
+        approvalRequestId: record2.approvalRequestId!,
+        idempotencyKey: 'idem-res-ref-reject',
+        action: 'REJECT',
+      },
+      actorCFO
+    );
+    const request2 = store2.approvalRequests.get(record2.approvalRequestId!)!;
+    expect(request2.resolvedDecisionId).toBe(rejectRecord.decisionId);
+    expect(request2.resolvedDecisionId).not.toBe(request2.decisionId);
+  });
 });
