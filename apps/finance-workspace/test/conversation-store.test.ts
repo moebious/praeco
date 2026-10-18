@@ -218,7 +218,7 @@ describe("versioned migration and operational boundaries", () => {
   })
 
   it("retains TLS verification and bounds remote connection resources", () => {
-    const configuration = workspacePoolConfiguration("postgres://synthetic:synthetic@db.example.test/workspace?sslmode=require")
+    const configuration = workspacePoolConfiguration("postgres://db.example.test/workspace?sslmode=require")
     expect(new URL(configuration.connectionString!).searchParams.get("sslmode")).toBe("verify-full")
     expect(configuration.max).toBe(4)
     expect(configuration.connectionTimeoutMillis).toBe(5_000)
