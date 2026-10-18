@@ -13,7 +13,7 @@ Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Bl
 | Component | Ownership | Status |
 | --- | --- | --- |
 | **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | Local runtime and LlamaIndex adapters implemented; live cloud/OCR validation pending |
-| **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Specification/implementation pending |
+| **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Kernel, approvals, trusted L1 reader adapter and operations dashboard implemented with a synthetic in-memory ledger; SQL-backed persistence and L3 integration pending |
 | **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Design in progress |
 | **DEMO-001 · Synthetic AP Environment** | Test fixtures, reference data, seed/reset/replay and test-only oracle | Handoff prepared; integration pending |
 | **DEMO-002 · AgentMail intake** | Email ingestion adapter | Proposed, not required for core golden-set tests |
@@ -26,7 +26,7 @@ Eight synthetic payable scenarios cover two automatic simulated authorizations, 
 
 ```text
 apps/              # UI and API entrypoints (to be implemented)
-packages/          # L1, L2, L3 and shared contracts (to be implemented)
+packages/          # L1 evidence intelligence, external intake, and the L2 decision kernel
 integrations/      # AgentMail, Daytona and other adapters (as needed)
 demo/              # Synthetic AP environment, replay, evaluation
 docs/              # Architecture decisions and specifications
@@ -40,6 +40,10 @@ Directories are added as their implementations land. The accepted L1 wire contra
 Use Node 22.12+ and npm. Run `npm ci`, `npm run check`, and `npm run l1:demo` for a synthetic offline invoice. See the [L1 provisioning and integration guide](docs/architecture/l1-runtime.md) for hosted LlamaParse/LlamaExtract configuration and L2/L3 integration. The offline extractor is explicitly labelled; passing local tests does not establish hosted OCR accuracy or financial authorization safety.
 
 The separate [external-document intake package](packages/external-document-intake/README.md) preserves mock ERP attachment provenance and revisions without changing L1's wire contract. Run `npm run test:l1:integration` to exercise it.
+
+## Run L2
+
+`npm run test:l2` exercises the decision kernel, transactional semantics, human-approval lifecycle and a trusted L1 `reader.loadReady` integration against a real synthetic PDF. `npm run l2:demo` evaluates the eight canonical Blinka scenarios through the six gates and demonstrates one simulated FinanceAdmin approval; `npm run l2:web` serves the operations dashboard at `http://localhost:3000`. The L2 store is an in-process synthetic ledger for the hackathon, not the SQL-backed authoritative store required by ADR-003, and no real payments are ever made: `AUTHORIZED_SIMULATED` never means `PAID`.
 
 ## Contribution workflow
 
