@@ -40,7 +40,7 @@ Any hard failure dominates a simultaneously exceeded G6 threshold. When hard gat
 
 ### Canonical payable business identity and multi-envelope claims
 
-Use `(tenantId, canonicalVendorId, normalizedInvoiceNumber)`. Resolve canonical vendor identity **from trusted records** by joining on **canonicalized tax ID** (uppercase alphanumeric, punctuation stripped) with an exact match; missing or ambiguous tax ID fails closed (`BLOCKED: VENDOR_TAX_ID_UNRESOLVED`). The vendor master owns canonical display names; L1's observed legal name is a corroboration field, never a primary join key. Normalize invoice numbers deterministically (Unicode normalization, outer whitespace removal, case folding); do not aggressively strip punctuation or leading zeros without an explicit rule.
+Use length-prefixed canonical key encoding (`${tenantId.length}:${tenantId}:${canonicalVendorId.length}:${canonicalVendorId}:${normalizedInvoiceNumber.length}:${normalizedInvoiceNumber}`) to prevent delimiter-collision attacks (such as invoice numbers containing `:`). Resolve canonical vendor identity **from trusted records** by joining on **canonicalized tax ID** (uppercase alphanumeric, punctuation stripped) with an exact match; missing or ambiguous tax ID fails closed (`BLOCKED: VENDOR_TAX_ID_UNRESOLVED`). The vendor master owns canonical display names; L1's observed legal name is a corroboration field, never a primary join key. Normalize invoice numbers deterministically (Unicode normalization, outer whitespace removal, case folding); do not aggressively strip punctuation or leading zeros without an explicit rule.
 
 **Multi-envelope and duplicate handling (MVP):**
 1. Obligation rows (`payable_obligations`) are created **only at commit**, never at PENDING.
@@ -52,7 +52,7 @@ Use `(tenantId, canonicalVendorId, normalizedInvoiceNumber)`. Resolve canonical 
 ### Contract matching taxonomy
 
 A contract record explicitly declares its matching mode:
-- `EXACT`: Contract amount, currency, and period must match exactly. Under-billing is a mismatch and fails closed.
+- `EXACT`: Contract amount, currency, and period must match exactly. Under-billing is a mismatch and fails closed with `UNDER_BILLING_DISALLOWED`.
 - `RECURRING_TOLERANCE`: An approved recurring reference amount with a declared `maxPositiveVariancePct` (for the canonical SaaS scenario, reference USD 470 with max 5% positive variance; USD 480 qualifies). Tolerance applies to positive variance only; under-billing passes.
 - `CEILING`: An approved upper bound (e.g., maximum USD 4,000 for agency work). Amounts at or below the ceiling pass; amounts exceeding the ceiling fail G4.
 
@@ -65,13 +65,13 @@ Assigning a payable to a corporate budget period `(tenantId, YYYY-MM)` uses a de
 2. Fallback to the UTC month of the observed `dueDate` (guaranteed observed by L1 critical fields) with a recorded reason code (`PERIOD_FROM_DUE_DATE`).
 3. Billing period is recorded non-blocking context; for net-terms invoices where service period precedes invoice issue month, mismatch is informative and does not block.
 
-### Delegated autonomy and human initiation (G6)
+### Delegated autonomy and threshold evaluation (G6)
 
-G6 checks worker capability grants and autonomous ceilings. If a proposal is initiated directly by an authenticated actor possessing the `FinanceAdmin` role, G6 passes as exempt human initiation (`PASS: EXEMPT_HUMAN_INITIATOR`), preventing self-escalation loops.
+G6 checks worker capability grants and autonomous ceilings uniformly across all proposals, regardless of initiator. A proposal exceeding the autonomous ceiling initiates the normal `PENDING_HUMAN_APPROVAL` workflow; an authenticated `FinanceAdmin` may then exercise the bound, single-use approval action to authorize it. Missing or revoked grant actions fail closed (`BLOCKED: GRANT_ACTION_NOT_PERMITTED`), while an eligible amount exceeding the worker or policy ceiling escalates (`PENDING_HUMAN_APPROVAL`).
 
 ### Human approval lifecycle and staleness
 
-Only an authenticated, tenant-bound `FinanceAdmin` may authorize a specific eligible over-limit decision. The approval binds the payable ID, exact source financial amount/currency, normalized amount and FX snapshot, canonical vendor and destination fingerprint (using keyed HMAC with the pinned synthetic key), budget identity and limit revision (`budgetId` + `limitUsd` revision), contract/policy/grant revisions, and expiry.
+Only an authenticated, tenant-bound `FinanceAdmin` may authorize a specific eligible over-limit decision. The approval binds the payable ID, exact source financial amount/currency, normalized amount and FX snapshot, canonical vendor and destination fingerprint (using keyed HMAC with a synthetic fixture-supplied key of ≥ 32 bytes, defined in test fixtures, never in spec text), budget identity and limit revision (`budgetId` + `limitUsd` revision), contract/policy/grant revisions, and expiry.
 
 An approval decision does not blindly change PENDING to AUTHORIZED. It triggers an **entirely fresh** trusted L2 evaluation and atomic budget commit.
 - **Budget consumption is not staleness:** Changes to `committedUsd` during an approval wait do not invalidate the approval binding. Instead, fresh evaluation of G5 catches budget exhaustion and legitimately returns `BLOCKED: INSUFFICIENT_BUDGET`.

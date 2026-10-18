@@ -113,7 +113,7 @@ export function evaluatePayable(
   // Step 11: G6 - Autonomous threshold and worker grant
   const checkG6 = evaluateGateG6(unroundedUsd, action, context);
 
-  const allChecks: readonly GateCheckResult[] = [
+  const allChecks: GateCheckResult[] = [
     checkG1,
     checkG2,
     checkG3,
@@ -132,6 +132,15 @@ export function evaluatePayable(
 
   if (hardFailures.length > 0) {
     // Hard block strictly dominates! Even if G6 was REVIEW_ELIGIBLE
+    if (checkG6.status === 'REVIEW_ELIGIBLE') {
+      const idx = allChecks.findIndex(c => c.gate === 'G6');
+      if (idx !== -1) {
+        allChecks[idx] = {
+          ...checkG6,
+          facts: { ...checkG6.facts, dominated: true },
+        };
+      }
+    }
     outcome = 'BLOCKED';
     const primaryFailure = hardFailures[0]!;
     explanation = `Pago bloqueado por políticas de control (${primaryFailure.code}): ${primaryFailure.explanation}`;

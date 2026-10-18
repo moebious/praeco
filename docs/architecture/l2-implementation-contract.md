@@ -35,6 +35,7 @@ interface GateCheckResult {
   explanation: string;
   evidenceRefs: readonly string[];
   authoritativeRecordRefs: readonly string[];
+  facts?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 interface PayableProposal {
@@ -83,13 +84,13 @@ interface FinancialAuthorizationService {
 }
 ```
 
-Do not allow the model to supply `TrustedActorContext`. A `preview` must be clearly marked non-binding. The implementation must specify a canonical intent digest binding amount, original currency, L1 evidence IDs/versions, beneficiary/account fingerprint (keyed HMAC with pinned synthetic key `"praeco-synthetic-hmac-key"`), budget, contract, policy and grant revisions. Command mapping: `decideAndCommit` requires `REQUEST_SIMULATED_AUTHORIZATION` grant action; `preview` requires `PROPOSE_PAYABLE`.
+Do not allow the model to supply `TrustedActorContext`. A `preview` must be clearly marked non-binding. The implementation must specify a canonical intent digest binding amount, original currency, L1 evidence IDs/versions, beneficiary/account fingerprint (keyed HMAC with a synthetic fixture-supplied key of ≥ 32 bytes, defined in test fixtures, never in spec text), budget, contract, policy and grant revisions. Command mapping: `decideAndCommit` requires `REQUEST_SIMULATED_AUTHORIZATION` grant action; `preview` requires `PROPOSE_PAYABLE`.
 
 ### Normative evaluation & matching rules
 
 - **L2-1 Approval binding vs budget staleness:** An approval grant binds `budgetId` and `limitUsd` revision only. Changes to `committedUsd` during an approval wait do not invalidate the approval binding; rather, the fresh G5 re-evaluation catches the budget exhaustion and legitimately returns `BLOCKED: INSUFFICIENT_BUDGET`. Structural changes (amount, currency, vendor, destination, contract, policy, grant) trigger stale approval invalidation (`APPROVAL_STALE`).
 - **L2-2 Concurrency & G2 loser handling:** Obligations are created only upon successful commit. When concurrent auto-approve decisions race on the unique constraint of `payable_obligations`, the transaction loser returns `BLOCKED: G2_DUPLICATE` (if intent digest matches) or `BLOCKED: G2_CONFLICT` (if intent digest differs), never an unhandled crash or retried insert under a new key.
-- **L2-3 Multi-envelope canonical payable claim:** Multiple READY invoice envelopes with identical canonical key (`tenantId + ":" + vendorTaxId + ":" + invoiceNumber`) and identical intent digest constitute one obligation: select the deterministic representative (earliest registered source) and record others as corroborating duplicates. Multiple READY envelopes with the same key but different intent digest fail closed as `BLOCKED: AMBIGUOUS_PAYABLE_CLAIM`. (For case 04, the PDF is the sole invoice envelope; supplemental chat context is non-blocking advisory context).
+- **L2-3 Multi-envelope canonical payable claim:** Multiple READY invoice envelopes with identical length-prefixed canonical key (`${tenantId.length}:${tenantId}:${canonicalTaxId.length}:${canonicalTaxId}:${invoiceNumber.length}:${invoiceNumber}`) and identical intent digest constitute one obligation: select the deterministic representative (earliest registered source) and record others as corroborating duplicates. Multiple READY envelopes with the same key but different intent digest fail closed as `BLOCKED: AMBIGUOUS_PAYABLE_CLAIM`. (For case 04, the PDF is the sole invoice envelope; supplemental chat context is non-blocking advisory context).
 - **L2-4 Budget period assignment:** Derive period as the UTC month of observed `issueDate`. If `issueDate` is missing or unobserved, fall back to `dueDate` (which is guaranteed observed in L1 `DEFAULT_CRITICAL_FIELDS`) and record reason code `PERIOD_FROM_DUE_DATE`. `billingPeriod` is non-blocking corroborating context.
 - **L2-5 Contract match modes:**
   - `EXACT`: under-billing fails with `UNDER_BILLING_DISALLOWED`.
@@ -137,9 +138,9 @@ All cases run under synthetic worker grant seed: `perPayableLimitUsd: "2500.00"`
 | 03 Mexico MXN 76,000 / 20 = USD 3,800 | PENDING_HUMAN_APPROVAL | G6 USD 2,500 autonomous threshold | Grant limit $2,500 (< $3,800); contract ceiling $4,000; budget $4,500 |
 | 04 Argentina USD 1,950 PDF; chat +450 vs authorized USD 1,500 | BLOCKED | unapproved amendment | Grant limit $2,500; contract exact $1,500 |
 | 05 Forwarded changed-hash invoice duplicate of #01 | BLOCKED | payable business identity | Grant limit $2,500; preseeded commitment for Case 01 |
-| 06 COP 2,400,000 / 4,000 = USD 600 unknown vendor | BLOCKED | nonallowlisted | Grant limit $2,500; unknown tax ID / not in vendor directory |
+| 06 COP 2,400,000 / 4,000 = USD 600 unknown vendor | BLOCKED | nonallowlisted | Grant limit $2,500; tax ID not allowlisted in trusted vendor directory |
 | 07 USD 2,100 vs USD 1,400 budget | BLOCKED | funds insufficient | Grant limit $2,500; available period budget $1,400 (< $2,100) |
-| 08 USD 1,200 changed bank account | BLOCKED | destination mismatch | Grant limit $2,500; account hash mismatch against vendor directory |
+| 08 USD 1,200 changed bank account | BLOCKED | destination mismatch | Grant limit $2,500; payment account differs from trusted vendor directory |
 
 Each case has **independent seed state**. Do not run them against one shared ledger unless explicitly in a separate sequential suite. Never import `ground-truth` files into runtime code.
 
@@ -159,7 +160,7 @@ Each case has **independent seed state**. Do not run them against one shared led
 - Replay with original versions reproduces the recorded gate outcome without writing; current reevaluation is explicitly separate.
 - Unauthorized tenant/actor access and model-provided financial context are rejected.
 - Redacted UI payloads contain no complete banking account identifiers.
-- `npm run check` passes, plus serializable transactional integration test report. No claim about a successful bank payment.
+- `npm run check` passes, plus PostgreSQL-backed integration test report (using disposable Neon branch, provisioned local Postgres, or Docker). No claim about a successful bank payment.
 
 ## Delivery
 

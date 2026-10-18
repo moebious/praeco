@@ -18,6 +18,7 @@ export interface GateCheckResult {
   explanation: string;
   evidenceRefs: readonly string[];
   authoritativeRecordRefs: readonly string[];
+  facts?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 export interface PayableProposal {

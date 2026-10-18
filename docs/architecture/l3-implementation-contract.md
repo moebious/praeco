@@ -127,13 +127,15 @@ interface IngestSourceResult {
   envelopes: ReadonlyArray<{
     envelopeId: L1EnvelopeId;
     pipelineRunId: string;
-    processingStatus: "READY" | "AMBIGUOUS" | "REJECTED";
+    processingStatus: "READY_FOR_POLICY_EVALUATION" | "REVIEW_REQUIRED" | "REJECTED" | "PROCESSING_FAILED";
   }>;
 }
 interface EvidencePort {
   ingestSource(tenantId: string, sourceReference: string): Promise<IngestSourceResult>;
   loadReady(tenantId: string, envelopeId: L1EnvelopeId): Promise<unknown>;
 }
+// Imported from @praeco/financial-decision-kernel:
+// FinancialDecisionRecord, FinancialEvaluation, PayableProposal
 interface FinancialDecisionPort {
   decideAndCommit(
     input: {
@@ -143,8 +145,8 @@ interface FinancialDecisionPort {
       agentGrantRef: string;
     },
     principal: TrustedPrincipal
-  ): Promise<unknown>; // returns L2 FinancialDecisionRecord
-  getDecision(tenantId: string, decisionId: L2DecisionId): Promise<unknown | null>;
+  ): Promise<FinancialDecisionRecord>;
+  getDecision(tenantId: string, decisionId: L2DecisionId): Promise<FinancialDecisionRecord | null>;
 }
 ```
 

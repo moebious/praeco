@@ -11,12 +11,13 @@
 | 05 Forwarded duplicate | Same invoice number/vendor/period as case 01, different transport | Prior authorization preseeded in ledger | `BLOCKED` — duplicate | Limit USD 2,500; `REQUEST_SIMULATED_AUTHORIZATION` |
 | 06 New beneficiary | COP 2,400,000 = USD 600 (4,000 COP/USD) | Beneficiary not allowlisted in vendor directory | `BLOCKED` — allowlist | Limit USD 2,500; `REQUEST_SIMULATED_AUTHORIZATION` |
 | 07 Insufficient budget | USD 2,100 | Independently seeded available period budget USD 1,400 | `BLOCKED` — insufficient budget | Limit USD 2,500; `REQUEST_SIMULATED_AUTHORIZATION` |
-| 08 Changed account | USD 1,200 | Known vendor; invoice payment account differs from trusted directory (HMAC mismatch) | `BLOCKED` — destination mismatch | Limit USD 2,500; `REQUEST_SIMULATED_AUTHORIZATION` |
+| 08 Changed account | USD 1,200 | Known vendor; invoice payment account differs from trusted directory | `BLOCKED` — destination mismatch | Limit USD 2,500; `REQUEST_SIMULATED_AUTHORIZATION` |
 
 ## Required execution semantics
 
 - Fixed demo `maxAutoApproveUsd`: **USD 2,500**.
 - Default worker grant: `perPayableLimitUsd: "2500.00"`, `allowedActions: ["PROPOSE_PAYABLE", "REQUEST_SIMULATED_AUTHORIZATION"]`.
+- The independent adversarial L1 corpus has at least 30 documents: eight scenarios alone do not prove extraction reliability.
 - Each isolated scenario has its own authoritative vendor, contract, policy and ledger snapshot. Do not let previous scenario execution change expected results.
 - Sequential budget consumption is a separate integration mode, with recorded transactions and deterministic expected state transitions.
 - L1 extracts/cites source facts and normalizes monetary values; it does not know ground-truth payment outcomes.
@@ -41,8 +42,8 @@
    - If budget is consumed during an approval wait, the subsequent approval resolution returns `BLOCKED: INSUFFICIENT_BUDGET` (G5 fresh evaluation) without invalidating the approval binding.
    - If contract, vendor account, amount, currency, policy or grant changes during the wait, approval resolution fails closed with `APPROVAL_STALE`.
 6. **Worker capability grants:**
-   - Proposing an action without the required grant action (e.g. calling `decideAndCommit` without `REQUEST_SIMULATED_AUTHORIZATION`) fails closed.
-   - Proposing an amount exceeding the worker's grant `perPayableLimitUsd` (e.g. limit $2,000 for a $2,200 invoice) fails closed or requires elevation.
+   - Missing or revoked grant action (e.g. calling `decideAndCommit` without `REQUEST_SIMULATED_AUTHORIZATION`) fails closed (`BLOCKED: GRANT_ACTION_NOT_PERMITTED`).
+   - Proposing an eligible amount exceeding the worker's grant `perPayableLimitUsd` (e.g. limit $2,000 for a $2,200 invoice when G1–G5 pass) escalates to `PENDING_HUMAN_APPROVAL` (eligible excess).
 7. **Contract matching semantics:**
    - `EXACT`: under-billing or over-billing fails (`UNDER_BILLING_DISALLOWED` / `CONTRACT_AMOUNT_MISMATCH`).
    - `RECURRING_TOLERANCE`: under-billing passes; over-billing $\le$ configured `maxPositiveVariancePct` passes; exceeding tolerance fails.
