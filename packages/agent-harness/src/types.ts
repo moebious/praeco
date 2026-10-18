@@ -53,6 +53,7 @@ export interface TrustedExecutionContext {
   workerVersionId: string;
   runId: string;
   ownershipEpoch: number;
+  signal?: AbortSignal;
 }
 
 export type EvidenceRunReference = {

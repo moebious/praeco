@@ -117,6 +117,54 @@ export function validateAttachmentSignature(mimeType: string, filename: string, 
 }
 
 /**
+ * Computes a deterministic canonical digest of an AgentMail webhook's entire content.
+ * Binds tenant, installation, message, sender, recipient, subject, body text hash, and exact attachment hashes.
+ */
+export function computeAgentMailContentDigest(payload: AgentMailWebhookPayload): string {
+  const attachments = payload.attachments ?? [];
+  const attDigests = attachments
+    .map((att) => {
+      const hash = createHash('sha256').update(att.content).digest('hex');
+      return `${att.filename}:${att.mimeType}:${hash}`;
+    })
+    .join(';');
+
+  const bodyHash = createHash('sha256')
+    .update(payload.text ?? payload.subject ?? '')
+    .digest('hex');
+
+  const parts = [
+    payload.tenantId,
+    payload.installationId,
+    payload.messageId,
+    payload.from,
+    payload.to,
+    payload.subject,
+    bodyHash,
+    attDigests,
+  ];
+  return createHash('sha256').update(parts.join('|')).digest('hex');
+}
+
+/**
+ * Computes the expected HMAC-SHA256 signature for an AgentMail webhook payload.
+ * When rawBody is provided, signs timestamp + '.' + rawBody.
+ * Otherwise, signs timestamp + '.' + canonical content digest.
+ */
+export function computeAgentMailSignature(
+  payload: AgentMailWebhookPayload,
+  secret: string,
+  rawBody?: string
+): string {
+  const timestamp = payload.timestamp ?? '';
+  const signedContent =
+    rawBody !== undefined
+      ? `${timestamp}.${rawBody}`
+      : `${timestamp}.${computeAgentMailContentDigest(payload)}`;
+  return createHmac('sha256', secret).update(signedContent).digest('hex');
+}
+
+/**
  * AgentMail Inbound Adapter.
  *
  * Implements ADR-006 & DEMO-002:
@@ -148,8 +196,19 @@ export class AgentMailChannelAdapter {
   /**
    * Verifies HMAC-SHA256 webhook signature and timestamp replay tolerance.
    */
-  verifyWebhook(payload: AgentMailWebhookPayload, signatureHeader?: string): void {
-    // 1. Timestamp replay defense
+  verifyWebhook(
+    payload: AgentMailWebhookPayload,
+    signatureHeader?: string,
+    rawBody?: string
+  ): void {
+    // 1. Mandatory timestamp when webhookSecret is configured (replay defense)
+    if (this.webhookSecret && payload.timestamp === undefined) {
+      throw new HarnessError(
+        'MISSING_WEBHOOK_TIMESTAMP',
+        'AgentMail webhook timestamp is mandatory when webhookSecret is configured'
+      );
+    }
+
     if (payload.timestamp !== undefined) {
       const ts =
         typeof payload.timestamp === 'number'
@@ -175,11 +234,7 @@ export class AgentMailChannelAdapter {
         );
       }
 
-      const signedPayload = `${payload.messageId}:${payload.from}:${payload.timestamp ?? ''}`;
-      const expectedHmac = createHmac('sha256', this.webhookSecret)
-        .update(signedPayload)
-        .digest('hex');
-
+      const expectedHmac = computeAgentMailSignature(payload, this.webhookSecret, rawBody);
       const expectedBuffer = Buffer.from(expectedHmac, 'utf8');
       const providedBuffer = Buffer.from(signatureToVerify, 'utf8');
 
@@ -200,10 +255,11 @@ export class AgentMailChannelAdapter {
    */
   async handleAgentMailWebhook(
     payload: AgentMailWebhookPayload,
-    signatureHeader?: string
+    signatureHeader?: string,
+    rawBody?: string
   ): Promise<AgentMailIngestResult> {
     // 1. Verify webhook signature & timestamp replay
-    this.verifyWebhook(payload, signatureHeader);
+    this.verifyWebhook(payload, signatureHeader, rawBody);
 
     const tenantId = payload.tenantId;
 

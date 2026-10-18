@@ -4,6 +4,7 @@ import type {
   EvidencePort,
   InboundMessageCommand,
   SpecialistRole,
+  TenantId,
   TrustedPrincipal,
 } from '../types.js';
 import type { HarnessStore } from '../store.js';
@@ -18,6 +19,7 @@ import type { SpecialistToolDefinition } from './types.js';
 
 export interface InboundChannelMessage {
   readonly id: string;
+  readonly tenantId: TenantId;
   readonly connectionId: string;
   readonly provider: 'AGENTMAIL' | 'EMAIL' | 'WEB' | 'TELEGRAM' | string;
   readonly from: string;
@@ -31,28 +33,38 @@ export interface InboundChannelMessage {
 }
 
 export interface ChannelInboxPort {
-  listMessages(filter?: {
-    connectionId?: string;
-    status?: 'PENDING' | 'PROCESSED' | 'ALL';
-    limit?: number;
-  }): Promise<readonly InboundChannelMessage[]>;
-  getMessage(messageId: string): Promise<InboundChannelMessage | undefined>;
-  markProcessed(messageId: string): Promise<void>;
+  listMessages(
+    tenantId: TenantId,
+    filter?: {
+      connectionId?: string;
+      status?: 'PENDING' | 'PROCESSED' | 'ALL';
+      limit?: number;
+    }
+  ): Promise<readonly InboundChannelMessage[]>;
+  getMessage(tenantId: TenantId, messageId: string): Promise<InboundChannelMessage | undefined>;
+  markProcessed(tenantId: TenantId, messageId: string): Promise<void>;
 }
 
 export class InMemoryChannelInbox implements ChannelInboxPort {
   private readonly messages = new Map<string, InboundChannelMessage>();
 
-  addMessage(message: InboundChannelMessage): void {
-    this.messages.set(message.id, { ...message });
+  private makeKey(tenantId: TenantId, messageId: string): string {
+    return `${tenantId}:${messageId}`;
   }
 
-  async listMessages(filter?: {
-    connectionId?: string;
-    status?: 'PENDING' | 'PROCESSED' | 'ALL';
-    limit?: number;
-  }): Promise<readonly InboundChannelMessage[]> {
-    let result = Array.from(this.messages.values());
+  addMessage(message: InboundChannelMessage): void {
+    this.messages.set(this.makeKey(message.tenantId, message.id), { ...message });
+  }
+
+  async listMessages(
+    tenantId: TenantId,
+    filter?: {
+      connectionId?: string;
+      status?: 'PENDING' | 'PROCESSED' | 'ALL';
+      limit?: number;
+    }
+  ): Promise<readonly InboundChannelMessage[]> {
+    let result = Array.from(this.messages.values()).filter((m) => m.tenantId === tenantId);
     if (filter?.connectionId) {
       result = result.filter((m) => m.connectionId === filter.connectionId);
     }
@@ -65,12 +77,12 @@ export class InMemoryChannelInbox implements ChannelInboxPort {
     return result;
   }
 
-  async getMessage(messageId: string): Promise<InboundChannelMessage | undefined> {
-    return this.messages.get(messageId);
+  async getMessage(tenantId: TenantId, messageId: string): Promise<InboundChannelMessage | undefined> {
+    return this.messages.get(this.makeKey(tenantId, messageId));
   }
 
-  async markProcessed(messageId: string): Promise<void> {
-    const msg = this.messages.get(messageId);
+  async markProcessed(tenantId: TenantId, messageId: string): Promise<void> {
+    const msg = this.messages.get(this.makeKey(tenantId, messageId));
     if (msg) {
       msg.status = 'PROCESSED';
     }
@@ -151,8 +163,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       limit: z.number().int().min(1).max(50).optional().default(10),
       status: z.enum(['PENDING', 'PROCESSED', 'ALL']).optional().default('PENDING'),
     }),
-    async execute(params) {
-      const messages = await options.inbox.listMessages(params);
+    async execute(params, context) {
+      const messages = await options.inbox.listMessages(context.principal.tenantId, params);
       return {
         messages: messages.map((m) => ({
           messageId: m.id,
@@ -179,7 +191,7 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
     }),
     async execute(params, context) {
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(params.messageId);
+      const msg = await options.inbox.getMessage(tenantId, params.messageId);
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -241,8 +253,9 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       messageId: z.string().min(1, 'messageId is required'),
       filename: z.string().min(1, 'filename is required'),
     }),
-    async execute(params) {
-      const msg = await options.inbox.getMessage(params.messageId);
+    async execute(params, context) {
+      const tenantId = context.principal.tenantId;
+      const msg = await options.inbox.getMessage(tenantId, params.messageId);
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -299,7 +312,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
         throw new HarnessError('EVIDENCE_PORT_UNAVAILABLE', 'L1 EvidencePort is not configured on Eve specialist');
       }
 
-      const msg = await options.inbox.getMessage(params.messageId);
+      const tenantId = context.principal.tenantId;
+      const msg = await options.inbox.getMessage(tenantId, params.messageId);
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -352,7 +366,7 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
     }),
     async execute(params, context) {
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(params.messageId);
+      const msg = await options.inbox.getMessage(tenantId, params.messageId);
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -422,7 +436,7 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       );
 
       // Mark message processed in inbox
-      await options.inbox.markProcessed(msg.id);
+      await options.inbox.markProcessed(tenantId, msg.id);
 
       return {
         caseId: assignment.caseId,
