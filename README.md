@@ -30,6 +30,12 @@ flowchart TD
 
 Document classification proposes packet boundaries. L1 validates evidence within those boundaries; L2 independently evaluates the payable. See the [classification adapter](packages/document-classification-adapter/README.md).
 
+### Product discovery
+
+The living [AI Teammates learning specification and handoff](docs/product/ai-teammates-learning-handoff.md) (Spanish) records reference-app observations, proposed Praeco changes and acceptance criteria as we test the experience. It complements the architecture contracts and ADRs.
+
+For the new workspace, see the [OpenCode execution brief](docs/product/opencode-execution-brief.md), the [technical baseline](docs/product/workspace-baseline.md) and the [delivery/review protocol](docs/product/orchestration-review.md).
+
 ### Financial outcomes
 
 | Outcome | Meaning |
@@ -52,13 +58,11 @@ npm run demo
 
 The default demo runs offline with deterministic synthetic inputs. It covers eight cases: a contractor invoice, a recurring SaaS bill, an above-threshold agency invoice, a contract mismatch, a forwarded duplicate, an unknown beneficiary, insufficient budget, and a changed bank account.
 
-To open the finance dashboard:
+`npm run test:l2` exercises the decision kernel, transactional semantics, human-approval lifecycle and a trusted L1 `reader.loadReady` integration against a real synthetic PDF. `npm run l2:demo` evaluates the eight canonical Blinka scenarios through the six gates and demonstrates one simulated FinanceAdmin approval. The L2 store is an in-process synthetic ledger for the hackathon, not the SQL-backed authoritative store required by ADR-003, and no real payments are ever made: `AUTHORIZED_SIMULATED` never means `PAID`.
 
-```bash
-npm run web
-```
+## Run the workspace
 
-Open [localhost:3000](http://localhost:3000). The server prints a session token for protected mutations; enter it in the dashboard. This dashboard runs the L2 scenario inspector, rather than a complete authenticated multichannel workspace.
+Run `npm run web:workspace` and open `http://localhost:3010`. The workspace currently provides the UI frame, programmed synthetic conversations and optional Clerk access. See its [setup and limitations](apps/finance-workspace/README.md).
 
 ### Development commands
 
@@ -82,7 +86,6 @@ PostgreSQL suites require a disposable database and otherwise skip. Follow the [
 | [Financial decision kernel](packages/financial-decision-kernel/README.md) | Deterministic policies, approvals, and financial outcomes |
 | [Financial SQL store](packages/financial-store-sql/README.md) | Atomic successful commitments and durable result recovery |
 | [Agent harness](packages/agent-harness/README.md) | Specialists, orchestration, channel adapters, and operational storage |
-| [Finance dashboard](apps/finance-dashboard/README.md) | Local scenario inspector and approval controls |
 
 ## Current scope
 
