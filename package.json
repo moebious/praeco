@@ -5,6 +5,9 @@
   "type": "module",
   "workspaces": ["packages/*", "apps/*"],
   "engines": { "node": ">=22.12.0" },
+  "overrides": {
+    "@ai-sdk/provider-utils": { "undici": "6.29.0" }
+  },
   "scripts": {
     "build": "npm run build --workspace @praeco/evidence-intelligence && npm run build --workspace @praeco/document-classification-adapter && npm run build --workspace @praeco/financial-decision-kernel && npm run build --workspace @praeco/financial-store-sql && npm run build --workspace @praeco/external-document-intake && npm run build --workspace @praeco/agent-harness",
     "typecheck": "npm run typecheck --workspaces --if-present",

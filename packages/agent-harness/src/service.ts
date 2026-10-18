@@ -4,6 +4,7 @@ import type {
   AssignmentId,
   AssignmentPort,
   AssignmentState,
+  CaseSourceLink,
   CheckpointStage,
   CommandReceipt,
   ExecutionEvent,
@@ -42,7 +43,7 @@ export class AssignmentService implements AssignmentPort {
   async createOrLoad(
     input: InboundMessageCommand,
     principal: TrustedPrincipal,
-    options?: { signal?: AbortSignal }
+    options?: { sourceLinks?: readonly CaseSourceLink[]; signal?: AbortSignal }
   ): Promise<{ assignment: Assignment; isDuplicate: boolean }> {
     if (options?.signal?.aborted) {
       throw new HarnessError('EXECUTION_ABORTED', 'createOrLoad was aborted by cancellation signal');
@@ -198,6 +199,7 @@ export class AssignmentService implements AssignmentPort {
       commandReceipt,
       assignment,
       caseData,
+      sourceLinks: options?.sourceLinks,
       threadLink,
       executionEvent,
       outboxEvent,

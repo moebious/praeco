@@ -347,7 +347,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
   it('3. Sender email spoofing does not grant authority (ADR-006 §12, DEMO-002)', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
-    const adapter = new AgentMailChannelAdapter({ store, service });
+    const adapter = new AgentMailChannelAdapter({ store, service, allowUnsignedSyntheticWebhook: true });
 
     // Senders spoofing CFO email or vendor address without pre-registered binding
     const spoofedCfoEmail = 'alice.cfo@blinka.com';
@@ -374,7 +374,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
   it('4. Revoked principal binding defense (ADR-006 Abuse case 5)', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
-    const adapter = new AgentMailChannelAdapter({ store, service });
+    const adapter = new AgentMailChannelAdapter({ store, service, allowUnsignedSyntheticWebhook: true });
 
     const revokedUser = 'former.contractor@vendor.com';
 
@@ -410,7 +410,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
   it('5. File signature & magic bytes validation (PDF, PNG, JPEG)', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
-    const adapter = new AgentMailChannelAdapter({ store, service });
+    const adapter = new AgentMailChannelAdapter({ store, service, allowUnsignedSyntheticWebhook: true });
 
     // A. Fake PDF (does not start with %PDF-) -> throws INVALID_FILE_SIGNATURE
     const fakePdfBytes = Buffer.from('NOT A REAL PDF FILE HEADER', 'utf8');
@@ -479,7 +479,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
   it('6. Oversized attachment rejection (> 20 MB)', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
-    const adapter = new AgentMailChannelAdapter({ store, service });
+    const adapter = new AgentMailChannelAdapter({ store, service, allowUnsignedSyntheticWebhook: true });
 
     // Construct an oversized buffer exceeding 20 MB (20MB + 1KB)
     const oversizedBytes = new Uint8Array(20 * 1024 * 1024 + 1024);
@@ -512,7 +512,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
   it('7. Technical idempotency & conflicting payload detection (ADR-006 §36)', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
-    const adapter = new AgentMailChannelAdapter({ store, service });
+    const adapter = new AgentMailChannelAdapter({ store, service, allowUnsignedSyntheticWebhook: true });
 
     const messageId = `msg-idemp-${randomUUID()}`;
     const pdfBytes = Buffer.from('%PDF-1.4\nTest invoice\n%%EOF', 'utf8');
@@ -557,7 +557,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
   it('8. Cross-tenant isolation across AgentMail inbounds, inbox, and Eve specialist tools', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
-    const adapter = new AgentMailChannelAdapter({ store, service });
+    const adapter = new AgentMailChannelAdapter({ store, service, allowUnsignedSyntheticWebhook: true });
     const inbox = new InMemoryChannelInbox();
 
     const messageId = `msg-tenant-${randomUUID()}`;
@@ -698,7 +698,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
     };
 
     // Adapt to standard Vercel AI SDK tools
-    const aiSdkTools = toAiSdkTools(eveTools, executionCtx);
+    const aiSdkTools = toAiSdkTools(eveTools, executionCtx, 'EVE');
     expect(aiSdkTools['eve_fetch_channel_inbox']).toBeDefined();
     expect(aiSdkTools['eve_inspect_inbound_message']).toBeDefined();
     expect(aiSdkTools['eve_extract_and_validate_attachment']).toBeDefined();
@@ -740,15 +740,28 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
     expect(result.stepsExecuted).toBe(4);
     expect(result.history.length).toBe(4);
 
-    // Verify step 2 output inspected sender
+    // Audit records are redacted: they carry structure and timing only.
     const step2Record = result.history[1]!;
     expect(step2Record.toolName).toBe('eve_inspect_inbound_message');
-    expect(step2Record.outputSummary).toContain('UNVERIFIED_EXTERNAL_SENDER');
+    expect(step2Record.inputSummary).toBe('(redacted)');
+    expect(step2Record.outputSummary).toBe('(redacted)');
 
-    // Verify step 3 validated attachment
     const step3Record = result.history[2]!;
     expect(step3Record.toolName).toBe('eve_extract_and_validate_attachment');
-    expect(step3Record.outputSummary).toContain('"isValidDocument":true');
+    expect(step3Record.outputSummary).toBe('(redacted)');
+
+    // Semantic outcomes are verified by executing the tools directly, not from the audit trail.
+    const inspectView = (await aiSdkTools['eve_inspect_inbound_message']!.execute(
+      { messageId: msgId },
+      { toolCallId: 'verify-inspect', messages: [] }
+    )) as { senderSecurityStatus: string };
+    expect(inspectView.senderSecurityStatus).toBe('UNVERIFIED_EXTERNAL_SENDER');
+
+    const extractView = (await aiSdkTools['eve_extract_and_validate_attachment']!.execute(
+      { messageId: msgId, filename: 'acme-invoice.pdf' },
+      { toolCallId: 'verify-extract', messages: [] }
+    )) as { isValidDocument: boolean };
+    expect(extractView.isValidDocument).toBe(true);
 
     // Verify message marked processed in inbox
     const updatedMsg = await inbox.getMessage(TENANT_A, msgId);
@@ -778,7 +791,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
       ownershipEpoch: 1,
     };
 
-    const aiSdkTools = toAiSdkTools(eveTools, executionCtx);
+    const aiSdkTools = toAiSdkTools(eveTools, executionCtx, 'EVE');
 
     // A. maxSteps exceeded throws MAX_STEPS_EXCEEDED
     const tightRunner = new AiSdkSpecialistRunner({ limits: { maxSteps: 2, timeoutMs: 15_000 } });
@@ -829,7 +842,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
       },
     };
 
-    const hangingAiSdkTools = toAiSdkTools([hangingTool], executionCtx);
+    const hangingAiSdkTools = toAiSdkTools([hangingTool], executionCtx, 'EVE');
     const hungRunner = new AiSdkSpecialistRunner({ limits: { maxSteps: 5, timeoutMs: 200 } });
     const hungStart = Date.now();
     await expect(
@@ -876,7 +889,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
       service: delayedService,
       inbox: delayedInbox,
     });
-    const delayedAiSdkTools = toAiSdkTools(delayedEveTools, executionCtx);
+    const delayedAiSdkTools = toAiSdkTools(delayedEveTools, executionCtx, 'EVE');
 
     const fastRunner = new AiSdkSpecialistRunner({ limits: { maxSteps: 5, timeoutMs: 15 } });
 
@@ -912,6 +925,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
       store,
       service,
       evidencePort,
+      allowUnsignedSyntheticWebhook: true,
     });
 
     const realPdfBytes = await readFile(new URL('01.pdf', demoSourcesRoot));
@@ -968,7 +982,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 6
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
     const inbox = new InMemoryChannelInbox();
-    const adapter = new AgentMailChannelAdapter({ store, service });
+    const adapter = new AgentMailChannelAdapter({ store, service, allowUnsignedSyntheticWebhook: true });
 
     const payload: AgentMailWebhookPayload = {
       tenantId: TENANT_A,
@@ -1013,7 +1027,7 @@ describe.skipIf(!databaseUrl)('AgentMail & AI SDK Intake — Neon PostgreSQL ope
   it('13. AgentMail transactional delivery & duplicate idempotency against live Neon PostgreSQL', async () => {
     const tenantId = `tenant-${randomUUID()}`;
     const service = new AssignmentService({ store: sqlStore });
-    const adapter = new AgentMailChannelAdapter({ store: sqlStore, service });
+    const adapter = new AgentMailChannelAdapter({ store: sqlStore, service, allowUnsignedSyntheticWebhook: true });
 
     const messageId = `msg-sql-${randomUUID()}`;
     const pdfBytes = Buffer.from('%PDF-1.4\nNeon PostgreSQL Live Intake Test\n%%EOF', 'utf8');
