@@ -10,6 +10,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:l1": "npm run test --workspace @praeco/evidence-intelligence",
+    "test:l1:integration": "npm run test --workspace @praeco/external-document-intake",
     "l1:demo": "npm run demo --workspace @praeco/evidence-intelligence",
     "l1:process": "node packages/evidence-intelligence/dist/cli.js",
     "l1:evaluate": "npm run evaluate --workspace @praeco/evidence-intelligence",

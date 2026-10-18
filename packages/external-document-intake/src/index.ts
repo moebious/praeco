@@ -4,3 +4,5 @@ export { FileExternalDocumentProvenanceStore } from './file-external-document-pr
 export { ExternalDocumentIntakeError } from './external-document-provenance.js';
 export type { ExternalObjectReference, ExternalDocumentReference, ExternalDocumentBinding,
   ExternalDocumentReceipt, ExternalDocumentProvenanceStore } from './external-document-provenance.js';
+export { createSyntheticErpAdapter } from './synthetic-erp-adapter.js';
+export type { SyntheticErpBill, SyntheticErpImportResult } from './synthetic-erp-adapter.js';
