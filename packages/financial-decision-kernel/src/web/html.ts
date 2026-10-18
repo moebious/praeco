@@ -95,7 +95,7 @@ export function renderDashboardHtml(): string {
         </div>
         <div>
           <span class="text-slate-500 font-medium">Presupuesto Mensual:</span>
-          <span id="metric-budget" class="font-mono font-semibold text-white ml-1.5">$5,000.00 USD</span>
+          <span id="metric-budget" class="font-mono font-semibold text-white ml-1.5">Por escenario (semilla canónica)</span>
         </div>
         <div>
           <span class="text-slate-500 font-medium">Comprometido:</span>
@@ -240,7 +240,9 @@ export function renderDashboardHtml(): string {
     function renderRulesUI() {
       document.getElementById('metric-limit').textContent = '$' + Number(currentRules.maxAutoApproveUsd).toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD';
       document.getElementById('metric-tol').textContent = currentRules.defaultRecurringTolerancePct + '%';
-      document.getElementById('metric-budget').textContent = '$' + Number(currentRules.budgetUsd).toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD';
+      document.getElementById('metric-budget').textContent = currentRules.budgetCustomized
+        ? '$' + Number(currentRules.budgetUsd).toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD'
+        : 'Por escenario (semilla canónica)';
       document.getElementById('metric-spent').textContent = '$' + Number(currentRules.spentUsd).toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD';
 
       document.getElementById('rule-max-auto').value = currentRules.maxAutoApproveUsd;
@@ -472,8 +474,10 @@ export function renderDashboardHtml(): string {
       const updated = {
         maxAutoApproveUsd: Number(document.getElementById('rule-max-auto').value).toFixed(2),
         defaultRecurringTolerancePct: Number(document.getElementById('rule-tol-pct').value).toFixed(2),
-        budgetUsd: Number(document.getElementById('rule-budget').value).toFixed(2),
       };
+      // Only send the budget when it actually changed so canonical per-scenario seeds stay intact.
+      const budgetVal = Number(document.getElementById('rule-budget').value).toFixed(2);
+      if (budgetVal !== currentRules.budgetUsd) updated.budgetUsd = budgetVal;
       await fetch('/api/rules', {
         method: 'POST',
         headers: {
