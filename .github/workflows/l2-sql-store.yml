@@ -1,0 +1,42 @@
+name: L2 SQL store
+
+on:
+  pull_request:
+    paths: ['packages/financial-store-sql/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
+  push:
+    branches: [main]
+    paths: ['packages/financial-store-sql/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  verify-sql:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        # Ephemeral, runner-local test container: trust auth means there is no
+        # password to leak or flag; it never leaves the CI machine.
+        image: postgres:16
+        env:
+          POSTGRES_DB: praeco_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres@localhost:5432/praeco_test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace @praeco/financial-store-sql
+      - run: npm run typecheck --workspace @praeco/financial-store-sql
+      - run: npm run test --workspace @praeco/financial-store-sql
