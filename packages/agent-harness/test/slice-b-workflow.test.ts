@@ -290,7 +290,7 @@ describe('Layer 3 Slice B — Durable Workflow & Specialist Roles', () => {
 
       expect(result.outcome).toBe('BLOCKED');
       expect(result.assignment.state).toBe('COMPLETED');
-      expect(result.policyExplanation.dominantReason).toBe('PAYMENT_ACCOUNT_MISMATCH');
+      expect(result.policyExplanation?.dominantReason).toBe('PAYMENT_ACCOUNT_MISMATCH');
     });
 
     it('guarantees retry idempotency without double ledger dispatch', async () => {
@@ -329,7 +329,7 @@ describe('Layer 3 Slice B — Durable Workflow & Specialist Roles', () => {
       const secondProposal = (await registry.executeTool(
         'submit_financial_proposal',
         'NOVA',
-        { intentId: first.proposalResult.intentId, scenarioId: 'BLINKA-01' },
+        { intentId: first.proposalResult!.intentId, scenarioId: 'BLINKA-01' },
         context
       )) as any;
 

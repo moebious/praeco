@@ -18,16 +18,22 @@ export function ensureHarnessWorkerGrant(
   allowedActions: readonly ('PROPOSE_PAYABLE' | 'REQUEST_SIMULATED_AUTHORIZATION')[]
 ): string {
   const grantId = `grant-harness-${workerPrincipalId}`;
-  if (!store.grants.has(grantId)) {
+  const existing = store.grants.get(grantId);
+  if (!existing) {
     const grant: WorkerCapabilityGrant = {
       grantId,
       grantRevisionId: `grant-rev-${workerPrincipalId}-1`,
       tenantId: store.tenantId,
       workerId: workerPrincipalId,
       perPayableLimitUsd: '2500.00',
-      allowedActions,
+      allowedActions: [...allowedActions],
     };
     store.grants.set(grantId, grant);
+  } else {
+    const merged = Array.from(new Set([...existing.allowedActions, ...allowedActions]));
+    if (merged.length > existing.allowedActions.length) {
+      existing.allowedActions = merged;
+    }
   }
   return grantId;
 }

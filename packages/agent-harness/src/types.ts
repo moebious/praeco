@@ -1,3 +1,6 @@
+import type { IntakeChannel, ReadyEvidence } from '@praeco/evidence-intelligence';
+import type { FinancialEvaluation } from '@praeco/financial-decision-kernel';
+
 export type TenantId = string;
 export type AssignmentId = string;
 export type PayableCaseId = string;
@@ -238,4 +241,59 @@ export interface AssignmentPort {
   ): Promise<Assignment>;
 
   get(assignmentId: AssignmentId, principal: TrustedPrincipal): Promise<Assignment>;
+}
+
+export interface EvidencePort {
+  ingestSource(
+    params: {
+      bytes: Uint8Array;
+      channel: IntakeChannel;
+      mimeType: string;
+      displayName?: string;
+      originMessageId?: string;
+    },
+    context: TrustedExecutionContext
+  ): Promise<EvidenceRunReference>;
+
+  loadRun(
+    reference: EvidenceRunReference,
+    principal: TrustedPrincipal
+  ): Promise<EvidenceRunReference>;
+
+  loadReady(
+    envelopeId: L1EnvelopeId,
+    principal: TrustedPrincipal
+  ): Promise<ReadyEvidence>;
+}
+
+export interface FinancialDecisionPort {
+  preview(
+    intent: FinancialIntentReference,
+    context: TrustedExecutionContext,
+    scenarioId?: string
+  ): Promise<{ binding: false; resultRef: string; evaluation: FinancialEvaluation }>;
+
+  decideAndCommit(
+    intent: FinancialIntentReference,
+    context: TrustedExecutionContext,
+    scenarioId?: string
+  ): Promise<FinancialDecisionReference>;
+
+  getCommandResult(
+    intent: FinancialIntentReference,
+    context: TrustedExecutionContext,
+    scenarioId?: string
+  ): Promise<FinancialCommandObservation>;
+
+  getDecision(
+    decisionId: L2DecisionId,
+    principal: TrustedPrincipal,
+    scenarioId?: string
+  ): Promise<FinancialDecisionReference | null>;
+
+  getApprovalStatus(
+    approvalRequestId: string,
+    principal: TrustedPrincipal,
+    scenarioId?: string
+  ): Promise<ApprovalObservation | null>;
 }

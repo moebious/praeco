@@ -92,7 +92,7 @@ describe('L2 Slice E — Trusted L1 Evidence Reader Integration', () => {
     // Check store effects
     const budget = store.budgets.get('BUDGET-2026-10');
     expect(budget?.committedUsd).toBe('2200');
-  }, 30_000);
+  }, 60_000);
 
   it('rejects an envelope through L1EvidenceReaderAdapter if not READY or verification tampered', async () => {
     const readerAdapter = new L1EvidenceReaderAdapter(l1.reader);

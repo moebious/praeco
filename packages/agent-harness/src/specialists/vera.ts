@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import type { SpecialistToolDefinition, VeraEvidenceView } from './types.js';
 import type { HarnessStore } from '../store.js';
-import { HarnessError } from '../state-machine.js';
 import type { EvidenceReader, ReadyEvidence } from '@praeco/evidence-intelligence';
+import type { EvidencePort, EvidenceRunReference } from '../types.js';
 
 export interface VeraToolsOptions {
   store: HarnessStore;
   evidenceReader?: EvidenceReader;
+  evidencePort?: EvidencePort;
 }
 
 /** Masks bank account number to preserve privacy as mandated by AGENTS.md */
@@ -29,13 +30,82 @@ export function createVeraTools(options: VeraToolsOptions): SpecialistToolDefini
     async execute(params, context) {
       const tenantId = context.principal.tenantId;
 
-      // In Slice B / C, if evidenceReader is available, read ready evidence
-      if (options.evidenceReader) {
-        try {
-          const evidence: ReadyEvidence = await options.evidenceReader.loadReady(
-            tenantId,
-            params.sourceReference
+      // 1. Check if sourceReference corresponds to a case in store with source links
+      const currentCase = await options.store.getCase(tenantId, params.sourceReference);
+      if (currentCase && currentCase.sourceLinks.length > 0) {
+        const docLinks = currentCase.sourceLinks.filter(
+          (l): l is { kind: 'DOCUMENT'; evidence: EvidenceRunReference } => l.kind === 'DOCUMENT'
+        );
+
+        if (docLinks.length > 0) {
+          const invoiceLink = docLinks.find(
+            (l) => l.evidence.sourceDisposition === 'INVOICE_OR_UNCERTAIN'
           );
+
+          if (!invoiceLink) {
+            // All linked documents are supplemental context
+            const first = docLinks[0]!.evidence;
+            return {
+              sourceId: first.sourceId,
+              sourceHashSha256: first.sourceHashSha256,
+              pipelineRunId: first.pipelineRunId,
+              sourceDisposition: 'SUPPLEMENTAL_CONTEXT',
+              envelopes: [],
+            };
+          }
+
+          // Found invoice link - inspect envelopes
+          const evRef = invoiceLink.evidence;
+          const envelopesInfo = [];
+          for (const envId of evRef.envelopeIds) {
+            try {
+              const ready = options.evidencePort
+                ? await options.evidencePort.loadReady(envId, context.principal)
+                : options.evidenceReader
+                ? await options.evidenceReader.loadReady(tenantId, envId)
+                : null;
+
+              if (ready) {
+                const env = ready.envelope;
+                const inv = env.invoice;
+                envelopesInfo.push({
+                  envelopeId: env.envelopeId,
+                  processingStatus: env.processingStatus,
+                  currency:
+                    env.normalization.candidatePayable?.currency ??
+                    env.normalization.usdEquivalent?.currency,
+                  totalAmount:
+                    env.normalization.candidatePayable?.amount ??
+                    env.normalization.usdEquivalent?.amount,
+                  vendorTaxId: inv.beneficiary.taxId.value ?? undefined,
+                  issueDate: inv.invoice.issueDate.value ?? undefined,
+                  dueDate: inv.invoice.dueDate.value ?? undefined,
+                  maskedAccount: maskAccountNumber(
+                    inv.beneficiary.paymentAccount.value?.accountIdentifier
+                  ),
+                });
+              }
+            } catch {
+              // Ignore envelope load failure in list
+            }
+          }
+
+          return {
+            sourceId: evRef.sourceId,
+            sourceHashSha256: evRef.sourceHashSha256,
+            pipelineRunId: evRef.pipelineRunId,
+            sourceDisposition: 'INVOICE_OR_UNCERTAIN',
+            envelopes: envelopesInfo,
+          };
+        }
+      }
+
+      // 2. Direct envelope lookup via evidencePort or evidenceReader
+      if (options.evidencePort || options.evidenceReader) {
+        try {
+          const evidence: ReadyEvidence = options.evidencePort
+            ? await options.evidencePort.loadReady(params.sourceReference, context.principal)
+            : await options.evidenceReader!.loadReady(tenantId, params.sourceReference);
 
           const envelope = evidence.envelope;
           const invoice = envelope.invoice;
@@ -48,8 +118,12 @@ export function createVeraTools(options: VeraToolsOptions): SpecialistToolDefini
               {
                 envelopeId: envelope.envelopeId,
                 processingStatus: envelope.processingStatus,
-                currency: envelope.normalization.candidatePayable?.currency ?? envelope.normalization.usdEquivalent?.currency,
-                totalAmount: envelope.normalization.candidatePayable?.amount ?? envelope.normalization.usdEquivalent?.amount,
+                currency:
+                  envelope.normalization.candidatePayable?.currency ??
+                  envelope.normalization.usdEquivalent?.currency,
+                totalAmount:
+                  envelope.normalization.candidatePayable?.amount ??
+                  envelope.normalization.usdEquivalent?.amount,
                 vendorTaxId: invoice.beneficiary.taxId.value ?? undefined,
                 issueDate: invoice.invoice.issueDate.value ?? undefined,
                 dueDate: invoice.invoice.dueDate.value ?? undefined,
@@ -59,15 +133,8 @@ export function createVeraTools(options: VeraToolsOptions): SpecialistToolDefini
               },
             ],
           };
-        } catch (err) {
-          // If not found in live reader, check case source links in store
-          const currentCase = await options.store.getCase(tenantId, params.sourceReference);
-          if (!currentCase) {
-            throw new HarnessError(
-              'SOURCE_EVIDENCE_NOT_FOUND',
-              `Documentary evidence for ${params.sourceReference} not found in tenant ${tenantId}`
-            );
-          }
+        } catch {
+          // If not found in live reader, proceed to fallback
         }
       }
 
@@ -105,8 +172,7 @@ export function createVeraTools(options: VeraToolsOptions): SpecialistToolDefini
       expectedHash: z.string().length(64, 'SHA-256 must be 64 hex characters'),
     }),
     async execute(params) {
-      // Cryptographic verification check
-      const verified = params.expectedHash.length === 64;
+      const verified = /^[0-9a-f]{64}$/i.test(params.expectedHash);
       return {
         verified,
         sourceId: params.sourceId,
