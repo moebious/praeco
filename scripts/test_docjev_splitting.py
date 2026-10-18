@@ -61,7 +61,7 @@ class SplitBenchmarkTests(unittest.TestCase):
         self.assertEqual(r["status"], "invalid_document")
 
     def test_parse_page_coverage(self):
-        r = benchmark.score_parse({"page_count": 3, "pages": [{"number": 1}, {"number": 3}]}, 3)
+        r = benchmark.score_parse({"page_count": 3, "pages": [{"number": 1}, {"number": 3}, {"number": 3}]}, 3)
         self.assertEqual(r["status"], "invalid_pages")
 
     def test_missing_key_skips_live_invocations(self):
