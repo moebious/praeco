@@ -48,7 +48,23 @@ export class SqlFinancialStore {
   public static async connect(databaseUrl: string): Promise<SqlFinancialStore> {
     const pool = new Pool({ connectionString: databaseUrl });
     try {
-      await pool.query(SCHEMA_DDL);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // CREATE TABLE IF NOT EXISTS can still race in PostgreSQL's type
+        // catalog. Serialize schema initialization across independent pools.
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+          ['praeco-schema', 'financial-store-sql']
+        );
+        await client.query(SCHEMA_DDL);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     } catch (err) {
       await pool.end();
       throw err;

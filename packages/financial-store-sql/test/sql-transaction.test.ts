@@ -14,7 +14,19 @@ describe.skipIf(!databaseUrl)('SQL financial store — ADR-003 transaction bound
   let store: SqlFinancialStore;
 
   beforeAll(async () => {
-    store = await SqlFinancialStore.connect(databaseUrl!);
+    // Independent pools must safely initialize a fresh schema concurrently.
+    const results = await Promise.allSettled([
+      SqlFinancialStore.connect(databaseUrl!),
+      SqlFinancialStore.connect(databaseUrl!),
+    ]);
+    const stores = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') {
+      await Promise.all(stores.map(opened => opened.close()));
+      throw failure.reason;
+    }
+    store = stores[0]!;
+    await stores[1]!.close();
   });
 
   afterAll(async () => {
