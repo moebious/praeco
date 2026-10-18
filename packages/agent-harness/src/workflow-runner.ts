@@ -17,6 +17,7 @@ import { BoundedSpecialistRunner } from './specialists/runner.js';
 import { createVeraTools } from './specialists/vera.js';
 import { createKaelTools } from './specialists/kael.js';
 import { createNovaTools } from './specialists/nova.js';
+import { createEveTools, type ChannelInboxPort } from './specialists/eve.js';
 import type {
   KaelPolicyExplanationView,
   NovaProposalDispatchResult,
@@ -30,6 +31,7 @@ export interface WorkflowRunnerOptions {
   specialistLimits?: Partial<SpecialistLimits>;
   evidencePort?: EvidencePort;
   decisionPort?: FinancialDecisionPort;
+  channelInbox?: ChannelInboxPort;
 }
 
 export interface WorkflowExecutionParams {
@@ -91,7 +93,22 @@ export class WorkflowRunner {
       this.registry.registerTool(tool);
     }
 
+    if (options.channelInbox) {
+      for (const tool of createEveTools({
+        store: this.store,
+        service: this.service,
+        inbox: options.channelInbox,
+        evidencePort: options.evidencePort,
+      })) {
+        this.registry.registerTool(tool);
+      }
+    }
+
     this.runner = new BoundedSpecialistRunner(this.registry, options.specialistLimits);
+  }
+
+  getToolRegistry(): SpecialistToolRegistry {
+    return this.registry;
   }
 
   /**
