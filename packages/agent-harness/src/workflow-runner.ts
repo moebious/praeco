@@ -38,6 +38,13 @@ export interface WorkflowExecutionParams {
   sourceReference: string;
   requestedBudgetId: string;
   scenarioId?: string;
+  /**
+   * Explicit envelope binding for multi-invoice packets: when a single source
+   * carries several verified invoice envelopes, each payable case must name
+   * the envelope it belongs to. Defaults to the first ready envelope, which
+   * remains correct for single-invoice sources.
+   */
+  envelopeId?: string;
 }
 
 export interface WorkflowExecutionResult {
@@ -172,7 +179,9 @@ export class WorkflowRunner {
     }
 
     // 3. Step 2: Kael Policy Explanation (Read-Only Preview)
-    const envelopeId = evidenceView.envelopes[0]!.envelopeId;
+    // A payable case may bind explicitly to one envelope of a multi-invoice
+    // packet; without a binding the first ready envelope is used.
+    const envelopeId = params.envelopeId ?? evidenceView.envelopes[0]!.envelopeId;
     const kaelContext: TrustedExecutionContext = {
       ...context,
       workerPrincipalId: `${context.workerPrincipalId}-kael`,
