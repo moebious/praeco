@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useState } from "react"
-import { Search } from "lucide-react"
+import { Search, Wallet } from "lucide-react"
 
 import { cn } from "cn"
 import { SpecialistAvatar } from "@/components/specialist-avatar"
@@ -95,6 +95,27 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Finanzas</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={pathname?.startsWith("/payables") ?? false}
+                  tooltip="Cuentas por pagar"
+                  render={<Link href="/payables" />}
+                  onClick={() => setOpenMobile(false)}
+                >
+                  <Wallet strokeWidth={1.5} aria-hidden />
+                  <span className="truncate text-sm font-medium">Cuentas por pagar</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarSeparator />
+
         <SidebarGroup>
           <SidebarGroupLabel>Equipo</SidebarGroupLabel>
           <SidebarGroupContent>

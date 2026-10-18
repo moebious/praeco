@@ -51,8 +51,10 @@ function LiveChatSession({ chatId, specialistId, initial }: {
   const transport = useTriggerChatTransport<typeof workspaceChat>({
     task: CHAT_TASK_ID,
     accessToken: ({ chatId: id }) => mintChatAccessToken({ chatId: id }),
-    startSession: ({ chatId: id }) => startChatSession({ chatId: id }),
-    clientData: {},
+    startSession: ({ chatId: id, clientData }) => startChatSession({
+      chatId: id, bindingId: clientData.bindingId,
+    }),
+    clientData: { bindingId: initial.bindingId },
     sessions: initial.session ? { [chatId]: initial.session } : undefined,
   })
   const chat = useChat<WorkspaceChatMessage>({
