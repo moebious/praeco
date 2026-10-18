@@ -7,6 +7,8 @@ import type {
   CommandReceipt,
   ExecutionEvent,
   ExternalPrincipalBinding,
+  FinancialDecisionReference,
+  FinancialIntentReference,
   InboundEventReceipt,
   OutboxEvent,
   PayableCase,
@@ -75,6 +77,12 @@ export interface HarnessStore {
   ): Promise<CommandReceipt | null>;
   saveCommandReceipt(receipt: CommandReceipt): Promise<void>;
 
+  // Financial intent & decision references
+  saveFinancialIntent(intent: FinancialIntentReference): Promise<void>;
+  getFinancialIntent(tenantId: TenantId, intentId: string): Promise<FinancialIntentReference | null>;
+  saveFinancialDecision(tenantId: TenantId, decision: FinancialDecisionReference): Promise<void>;
+  getFinancialDecision(tenantId: TenantId, decisionId: string): Promise<FinancialDecisionReference | null>;
+
   // Events & Outbox
   recordExecutionEvent(event: ExecutionEvent): Promise<void>;
   getExecutionEvents(tenantId: TenantId, aggregateId: string): Promise<readonly ExecutionEvent[]>;
@@ -92,6 +100,8 @@ export class InMemoryHarnessStore implements HarnessStore {
   public readonly runs = new Map<string, AgentRun>();
   public readonly checkpoints = new Map<string, Checkpoint>();
   public readonly commandReceipts = new Map<string, CommandReceipt>();
+  public readonly financialIntents = new Map<string, FinancialIntentReference>();
+  public readonly financialDecisions = new Map<string, FinancialDecisionReference>();
   public readonly executionEvents: ExecutionEvent[] = [];
   public readonly outboxEvents: OutboxEvent[] = [];
 
@@ -266,6 +276,29 @@ export class InMemoryHarnessStore implements HarnessStore {
       return;
     }
     this.commandReceipts.set(key, { ...receipt });
+  }
+
+  async saveFinancialIntent(intent: FinancialIntentReference): Promise<void> {
+    this.financialIntents.set(intent.intentId, { ...intent, envelopeIds: [...intent.envelopeIds] });
+  }
+
+  async getFinancialIntent(_tenantId: TenantId, intentId: string): Promise<FinancialIntentReference | null> {
+    const intent = this.financialIntents.get(intentId);
+    if (!intent) return null;
+    return { ...intent, envelopeIds: [...intent.envelopeIds] };
+  }
+
+  async saveFinancialDecision(tenantId: TenantId, decision: FinancialDecisionReference): Promise<void> {
+    this.financialDecisions.set(`${tenantId}:${decision.decisionId}`, {
+      ...decision,
+      gateSummaryRefs: [...decision.gateSummaryRefs],
+    });
+  }
+
+  async getFinancialDecision(tenantId: TenantId, decisionId: string): Promise<FinancialDecisionReference | null> {
+    const decision = this.financialDecisions.get(`${tenantId}:${decisionId}`);
+    if (!decision) return null;
+    return { ...decision, gateSummaryRefs: [...decision.gateSummaryRefs] };
   }
 
   async recordExecutionEvent(event: ExecutionEvent): Promise<void> {
