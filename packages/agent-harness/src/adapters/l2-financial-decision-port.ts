@@ -229,4 +229,39 @@ export class L2FinancialDecisionAdapter implements FinancialDecisionPort {
 
     return { status: 'EXPIRED' };
   }
+
+  public async resolveApproval(
+    params: {
+      approvalRequestId: string;
+      action: 'APPROVE' | 'REJECT';
+      reason?: string;
+      idempotencyKey?: string;
+    },
+    principal: TrustedPrincipal,
+    scenarioId?: string
+  ): Promise<FinancialDecisionReference> {
+    const { service } = this.resolveService(principal.tenantId, scenarioId);
+    const actor: TrustedActorContext = {
+      tenantId: principal.tenantId,
+      principalId: principal.principalId,
+      roles: principal.roles,
+    };
+
+    const record = await service.resolveApproval(
+      {
+        approvalRequestId: params.approvalRequestId,
+        action: params.action,
+        idempotencyKey:
+          params.idempotencyKey ?? `appr-resolve-${params.approvalRequestId}-${params.action}`,
+      },
+      actor
+    );
+
+    return {
+      decisionId: record.decisionId,
+      outcome: record.outcome,
+      approvalRequestId: record.approvalRequestId ?? undefined,
+      gateSummaryRefs: record.gateChecks.map((g) => g.code),
+    };
+  }
 }

@@ -3,6 +3,7 @@ import type {
   AgentRun,
   Assignment,
   AssignmentId,
+  AssignmentState,
   Checkpoint,
   CommandReceipt,
   ExecutionEvent,
@@ -64,6 +65,7 @@ export interface HarnessStore {
   // Assignments
   getAssignment(tenantId: TenantId, assignmentId: AssignmentId): Promise<Assignment | null>;
   saveAssignment(assignment: Assignment): Promise<void>;
+  findAssignmentsByState(tenantId: TenantId, state: AssignmentState): Promise<readonly Assignment[]>;
 
   // Runs & Checkpoints
   saveRun(run: AgentRun): Promise<void>;
@@ -250,6 +252,19 @@ export class InMemoryHarnessStore implements HarnessStore {
     this.assignments.set(this.assignmentKey(assignment.tenantId, assignment.assignmentId), {
       ...assignment,
     });
+  }
+
+  async findAssignmentsByState(
+    tenantId: TenantId,
+    state: AssignmentState
+  ): Promise<readonly Assignment[]> {
+    const results: Assignment[] = [];
+    for (const a of this.assignments.values()) {
+      if (a.tenantId === tenantId && a.state === state) {
+        results.push({ ...a });
+      }
+    }
+    return results;
   }
 
   async saveRun(run: AgentRun): Promise<void> {

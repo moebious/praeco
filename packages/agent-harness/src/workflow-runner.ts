@@ -1,12 +1,15 @@
+import { randomUUID } from 'node:crypto';
 import type {
   Assignment,
   AssignmentId,
   EvidencePort,
   FinancialDecisionPort,
+  FinancialDecisionReference,
   FinancialOutcome,
   TrustedExecutionContext,
   TrustedPrincipal,
 } from './types.js';
+import { HarnessError } from './state-machine.js';
 import type { HarnessStore } from './store.js';
 import type { AssignmentService } from './service.js';
 import { SpecialistToolRegistry } from './specialists/registry.js';
@@ -53,10 +56,12 @@ export class WorkflowRunner {
   private readonly service: AssignmentService;
   private readonly registry: SpecialistToolRegistry;
   private readonly runner: BoundedSpecialistRunner;
+  private readonly decisionPort?: FinancialDecisionPort;
 
   constructor(options: WorkflowRunnerOptions) {
     this.store = options.store;
     this.service = options.service;
+    this.decisionPort = options.decisionPort;
     this.registry = new SpecialistToolRegistry();
 
     // Register all specialist tools, wiring evidencePort and decisionPort if provided
@@ -252,6 +257,20 @@ export class WorkflowRunner {
 
     // 6. Outcome Resolution
     if (proposalResult.outcome === 'PENDING_HUMAN_APPROVAL') {
+      // Resolve-before-subscribe pre-check (ADR-007 Exit Criteria #3 / Sec 5.4):
+      // Check if approval was already resolved prior to waitpoint installation.
+      let alreadyResolved = false;
+      if (this.decisionPort && proposalResult.approvalRequestId) {
+        const preObservation = await this.decisionPort.getApprovalStatus(
+          proposalResult.approvalRequestId,
+          principal,
+          params.scenarioId
+        );
+        if (preObservation && preObservation.status !== 'PENDING') {
+          alreadyResolved = true;
+        }
+      }
+
       assignment = await this.service.advance(
         {
           assignmentId: params.assignmentId,
@@ -266,7 +285,37 @@ export class WorkflowRunner {
       // Attach approval request ID and decision ID
       assignment.initialL2DecisionId = proposalResult.decisionId;
       assignment.l2ApprovalRequestId = proposalResult.approvalRequestId;
+      assignment.triggerWaitToken = `wait-${assignment.assignmentId}-${Date.now()}`;
       await this.store.saveAssignment(assignment);
+
+      if (alreadyResolved) {
+        return this.resumeAssignment(
+          {
+            assignmentId: params.assignmentId,
+            scenarioId: params.scenarioId,
+          },
+          principal
+        );
+      }
+
+      // Resolve-before-subscribe post-check:
+      // Check if approval was resolved during waitpoint installation.
+      if (this.decisionPort && proposalResult.approvalRequestId) {
+        const postObservation = await this.decisionPort.getApprovalStatus(
+          proposalResult.approvalRequestId,
+          principal,
+          params.scenarioId
+        );
+        if (postObservation && postObservation.status !== 'PENDING') {
+          return this.resumeAssignment(
+            {
+              assignmentId: params.assignmentId,
+              scenarioId: params.scenarioId,
+            },
+            principal
+          );
+        }
+      }
     } else {
       assignment = await this.service.advance(
         {
@@ -291,6 +340,173 @@ export class WorkflowRunner {
       evidenceView,
       policyExplanation,
       proposalResult,
+    };
+  }
+
+  /**
+   * Resumes a suspended assignment (WAITING_FOR_REVIEW) by observing the
+   * authoritative L2 approval lifecycle (ADR-007 / L3 Contract Sec 5.5).
+   */
+  async resumeAssignment(
+    params: {
+      assignmentId: AssignmentId;
+      scenarioId?: string;
+    },
+    principal: TrustedPrincipal
+  ): Promise<WorkflowExecutionResult> {
+    const assignment = await this.service.get(params.assignmentId, principal);
+
+    if (assignment.tenantId !== principal.tenantId) {
+      throw new HarnessError('CROSS_TENANT_ACCESS_DENIED', 'Tenant mismatch');
+    }
+
+    if (assignment.state === 'COMPLETED') {
+      const latestDecision = assignment.latestL2DecisionId
+        ? await this.store.getFinancialDecision(principal.tenantId, assignment.latestL2DecisionId)
+        : null;
+
+      return {
+        assignment,
+        evidenceView: {
+          sourceId: assignment.caseId,
+          sourceHashSha256: '',
+          pipelineRunId: assignment.caseId,
+          sourceDisposition: 'INVOICE_OR_UNCERTAIN',
+          envelopes: [],
+        },
+        outcome: latestDecision?.outcome ?? 'AUTHORIZED_SIMULATED',
+        decisionId: latestDecision?.decisionId,
+        approvalRequestId: assignment.l2ApprovalRequestId,
+      };
+    }
+
+    if (assignment.state !== 'WAITING_FOR_REVIEW') {
+      throw new HarnessError(
+        'INVALID_STATE_TRANSITION',
+        `Cannot resume assignment in state ${assignment.state}: expected WAITING_FOR_REVIEW`
+      );
+    }
+
+    if (!assignment.l2ApprovalRequestId) {
+      throw new HarnessError(
+        'APPROVAL_REQUEST_NOT_FOUND',
+        `Assignment ${params.assignmentId} has no associated approval request ID`
+      );
+    }
+
+    if (!this.decisionPort) {
+      throw new HarnessError(
+        'DECISION_PORT_REQUIRED',
+        'Cannot resume approval without configured FinancialDecisionPort'
+      );
+    }
+
+    const observation = await this.decisionPort.getApprovalStatus(
+      assignment.l2ApprovalRequestId,
+      principal,
+      params.scenarioId
+    );
+
+    if (!observation) {
+      throw new HarnessError(
+        'APPROVAL_REQUEST_NOT_FOUND',
+        `Approval request ${assignment.l2ApprovalRequestId} not found in L2 store`
+      );
+    }
+
+    if (observation.status === 'PENDING') {
+      return {
+        assignment,
+        evidenceView: {
+          sourceId: assignment.caseId,
+          sourceHashSha256: '',
+          pipelineRunId: assignment.caseId,
+          sourceDisposition: 'INVOICE_OR_UNCERTAIN',
+          envelopes: [],
+        },
+        outcome: 'PENDING_HUMAN_APPROVAL',
+        approvalRequestId: assignment.l2ApprovalRequestId,
+      };
+    }
+
+    // Resolution occurred: RESOLVED (APPROVED), REJECTED, or EXPIRED
+    let resolutionDecision: FinancialDecisionReference | null = null;
+    let finalOutcome: FinancialOutcome = 'BLOCKED';
+
+    if (observation.resolutionDecisionId) {
+      resolutionDecision = await this.decisionPort.getDecision(
+        observation.resolutionDecisionId,
+        principal,
+        params.scenarioId
+      );
+      if (resolutionDecision) {
+        await this.store.saveFinancialDecision(principal.tenantId, resolutionDecision);
+        finalOutcome = resolutionDecision.outcome;
+      }
+    }
+
+    const nextVersion = assignment.version + 1;
+    const now = new Date().toISOString();
+    const updated: Assignment = {
+      ...assignment,
+      state: 'COMPLETED',
+      version: nextVersion,
+      latestL2DecisionId: observation.resolutionDecisionId ?? assignment.initialL2DecisionId,
+      triggerWaitToken: undefined,
+      updatedAt: now,
+    };
+
+    await this.store.saveAssignment(updated);
+
+    await this.store.saveCheckpoint({
+      checkpointId: `chk-${randomUUID()}`,
+      tenantId: principal.tenantId,
+      assignmentId: assignment.assignmentId,
+      runId: assignment.activeRunId ?? `resume-${Date.now()}`,
+      ownershipEpoch: assignment.ownershipEpoch,
+      stage: 'FINISHED',
+      inputRefs: [assignment.l2ApprovalRequestId],
+      outputRefs: [observation.resolutionDecisionId ?? 'resolved'],
+      recordedAt: now,
+    });
+
+    await this.store.recordExecutionEvent({
+      eventId: `evt-${randomUUID()}`,
+      tenantId: principal.tenantId,
+      aggregateId: assignment.assignmentId,
+      aggregateVersion: nextVersion,
+      eventType: 'ASSIGNMENT_RESUMED_COMPLETED',
+      commandId: observation.resolutionDecisionId ?? 'resolved',
+      occurredAt: now,
+    });
+
+    await this.store.enqueueOutbox({
+      eventId: `out-${randomUUID()}`,
+      tenantId: principal.tenantId,
+      eventType: 'ASSIGNMENT_RESOLVED',
+      commandId: observation.resolutionDecisionId ?? 'resolved',
+      payload: {
+        assignmentId: assignment.assignmentId,
+        approvalRequestId: assignment.l2ApprovalRequestId,
+        outcome: finalOutcome,
+        decisionId: observation.resolutionDecisionId,
+        observationStatus: observation.status,
+      },
+      occurredAt: now,
+    });
+
+    return {
+      assignment: updated,
+      evidenceView: {
+        sourceId: assignment.caseId,
+        sourceHashSha256: '',
+        pipelineRunId: assignment.caseId,
+        sourceDisposition: 'INVOICE_OR_UNCERTAIN',
+        envelopes: [],
+      },
+      outcome: finalOutcome,
+      decisionId: observation.resolutionDecisionId,
+      approvalRequestId: assignment.l2ApprovalRequestId,
     };
   }
 }
