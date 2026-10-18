@@ -1,0 +1,41 @@
+name: L1 DocJev experimental evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preflight uses only local parsing; live may consume OpenRouter credits for exactly two synthetic invoices"
+        required: true
+        type: choice
+        options: [preflight, live]
+        default: preflight
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    # Configure GitHub Environment 'evaluation' with required reviewers before any live runs.
+    environment: evaluation
+    env:
+      PYTHONPATH: docjev-upstream/src
+      TYPESAFE_BASE_URL: https://openrouter.ai/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check DocJev source revision
+        run: |
+          git clone --quiet https://github.com/jerryjliu/docjev.git docjev-upstream
+          git -C docjev-upstream checkout --detach c7abe276a970605feb9cb8b27513365b6c10726e
+          test "$(git -C docjev-upstream rev-parse HEAD)" = c7abe276a970605feb9cb8b27513365b6c10726e
+      - name: Install pinned DocJev package
+        run: python -m pip install ./docjev-upstream
+      - name: Run offline preflight or explicitly selected live experiment
+        env:
+          TYPESAFE_API_KEY: ${{ inputs.mode == 'live' && secrets.OPENROUTER_API_KEY || '' }}
+        run: |
+          python scripts/docjev-evaluation.py --docjev-root docjev-upstream --mode "${{ inputs.mode }}"
