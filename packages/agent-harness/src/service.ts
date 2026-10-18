@@ -279,6 +279,8 @@ export class AssignmentService implements AssignmentPort {
       next: AssignmentState;
       outputRefs: readonly string[];
       checkpointStage?: CheckpointStage;
+      references?: Pick<Assignment,
+        'initialL2DecisionId' | 'latestL2DecisionId' | 'l2ApprovalRequestId' | 'triggerWaitToken'>;
     },
     context: TrustedExecutionContext
   ): Promise<Assignment> {
@@ -295,6 +297,10 @@ export class AssignmentService implements AssignmentPort {
 
     const updated: Assignment = {
       ...assignment,
+      initialL2DecisionId: input.references?.initialL2DecisionId ?? assignment.initialL2DecisionId,
+      latestL2DecisionId: input.references?.latestL2DecisionId ?? assignment.latestL2DecisionId,
+      l2ApprovalRequestId: input.references?.l2ApprovalRequestId ?? assignment.l2ApprovalRequestId,
+      triggerWaitToken: input.references?.triggerWaitToken ?? assignment.triggerWaitToken,
       state: input.next,
       version: nextVersion,
       updatedAt: now,

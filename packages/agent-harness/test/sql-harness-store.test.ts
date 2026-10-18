@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { DEMO_TENANT_ID } from '@praeco/financial-decision-kernel';
 import {
   SqlHarnessStore,
   AssignmentService,
+  WorkflowRunner,
+  HarnessReconciler,
   computeInboundPayloadDigest,
   type Assignment,
   type CaseSourceLink,
@@ -10,6 +13,7 @@ import {
   type ExternalPrincipalBinding,
   type FinancialDecisionReference,
   type FinancialIntentReference,
+  type FinancialDecisionPort,
   type InboundMessageCommand,
   type LinkingChallenge,
   type OutboxEvent,
@@ -755,5 +759,125 @@ describe.skipIf(!databaseUrl)('SqlHarnessStore — Neon PostgreSQL operational b
     await expect(service.createOrLoad(tamperedCommand, principal)).rejects.toThrowError(
       /CONFLICTING_EVENT_PAYLOAD/
     );
+  });
+
+  it('keeps distinct new-thread events, persisted assignments, and outbox payloads on the winning case', async () => {
+    const tenantId = makeTenant();
+    const principal: TrustedPrincipal = {
+      tenantId, principalId: 'synthetic-admin', roles: ['FinanceAdmin'], bindingRevision: 'rev-1',
+    };
+    const service = new AssignmentService({ store });
+    const providerThreadId = `thread-${randomUUID()}`;
+    const commands = [0, 1].map(index => {
+      const raw = {
+        provider: 'EMAIL' as const,
+        installationId: 'distinct-event-race',
+        providerEventId: `event-${randomUUID()}`,
+        providerUserId: 'synthetic-sender',
+        providerThreadId,
+        messageId: `message-${index}`,
+        attachmentRefs: [],
+      };
+      return { ...raw, payloadDigest: computeInboundPayloadDigest(raw) };
+    });
+    // Force both preflight reads to miss. Only the transactional thread-key
+    // claim may elect the winner, not timing of the service's earlier read.
+    const preflight = vi.spyOn(store, 'findCaseByThread').mockResolvedValue(null);
+    let results;
+    try {
+      results = await Promise.all(commands.map(command => service.createOrLoad(command, principal)));
+    } finally {
+      preflight.mockRestore();
+    }
+    const canonical = await store.findCaseByThread(tenantId, 'EMAIL', 'distinct-event-race', providerThreadId);
+    expect(canonical).toBeTruthy();
+    expect(results.every(result => !result.isDuplicate)).toBe(true);
+    expect(new Set(results.map(result => result.assignment.assignmentId)).size).toBe(2);
+    for (const result of results) {
+      expect(result.assignment.caseId).toBe(canonical);
+      expect((await store.getAssignment(tenantId, result.assignment.assignmentId))?.caseId).toBe(canonical);
+    }
+    const events = await store.drainOutbox(tenantId);
+    expect(events).toHaveLength(2);
+    expect(events.every(event => event.payload.caseId === canonical)).toBe(true);
+    expect((await store.findAssignmentsByCase(tenantId, canonical!))).toHaveLength(2);
+  });
+
+  it.each(['01', '03', '08'])('runs the full scenario %s workflow under SQL CAS', async id => {
+    const principal: TrustedPrincipal = {
+      tenantId: DEMO_TENANT_ID,
+      principalId: 'workflow-cas-admin',
+      roles: ['FinanceAdmin'],
+      bindingRevision: 'rev-1',
+    };
+    const raw = {
+      provider: 'WEB' as const,
+      installationId: 'workflow-cas',
+      providerEventId: `event-${randomUUID()}`,
+      providerUserId: 'synthetic-user',
+      providerThreadId: `thread-${randomUUID()}`,
+      messageId: `message-${randomUUID()}`,
+      attachmentRefs: [],
+    };
+    const service = new AssignmentService({ store });
+    const { assignment } = await service.createOrLoad({
+      ...raw, payloadDigest: computeInboundPayloadDigest(raw),
+    }, principal);
+    const runner = new WorkflowRunner({ store, service });
+    const result = await runner.executeAssignmentWorkflow({
+      assignmentId: assignment.assignmentId,
+      triggerRunId: `run-${randomUUID()}`,
+      sourceReference: `${id}.pdf`,
+      scenarioId: `BLINKA-${id}`,
+      requestedBudgetId: 'BUDGET-2026-10',
+    }, principal);
+    const persisted = await store.getAssignment(principal.tenantId, assignment.assignmentId);
+    expect(persisted?.version).toBe(6);
+    if (id === '03') {
+      expect(persisted?.state).toBe('WAITING_FOR_REVIEW');
+      expect(persisted?.initialL2DecisionId).toBe(result.decisionId);
+      expect(persisted?.l2ApprovalRequestId).toBe(result.approvalRequestId);
+      expect(persisted?.triggerWaitToken).toBeTruthy();
+    } else {
+      expect(persisted?.state).toBe('COMPLETED');
+      expect(persisted?.latestL2DecisionId).toBe(result.decisionId);
+    }
+  });
+
+  it('only acknowledges SQL outbox events after successful delivery and retries failed handlers', async () => {
+    const tenantId = makeTenant();
+    const eventIds = ['retry', 'success'].map(label => `${label}-${randomUUID()}`);
+    for (const eventId of eventIds) {
+      await store.enqueueOutbox({
+        tenantId, eventId, eventType: 'ASSIGNMENT_QUEUED', commandId: eventId,
+        payload: {}, occurredAt: new Date().toISOString(),
+      });
+    }
+    const decisionPort: FinancialDecisionPort = {
+      preview: vi.fn(), decideAndCommit: vi.fn(), getCommandResult: vi.fn(),
+      getDecision: vi.fn(), getApprovalStatus: vi.fn(), resolveApproval: vi.fn(),
+    };
+    const options = {
+      store, decisionPort,
+      workflowRunner: new WorkflowRunner({ store, service: new AssignmentService({ store }) }),
+    };
+    expect((await new HarnessReconciler(options).tick(tenantId)).drainedOutboxCount).toBe(0);
+    let fail = true;
+    const delivered: string[] = [];
+    const reconciler = new HarnessReconciler({
+      ...options,
+      deliverL3Event: async event => {
+        if (event.eventId === eventIds[0] && fail) throw new Error('synthetic handler failure');
+        delivered.push(event.eventId);
+      },
+    });
+    expect((await reconciler.tick(tenantId)).drainedOutboxCount).toBe(1);
+    expect(delivered).toEqual([eventIds[1]]);
+    const retryable = await store.drainOutbox(tenantId);
+    expect(retryable.map(event => event.eventId)).toEqual([eventIds[0]]);
+    await store.failOutboxClaim(tenantId, [eventIds[0]!]);
+    fail = false;
+    expect((await reconciler.tick(tenantId)).drainedOutboxCount).toBe(1);
+    expect(await store.drainOutbox(tenantId)).toHaveLength(0);
   });
 });

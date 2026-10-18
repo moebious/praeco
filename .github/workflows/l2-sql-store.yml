@@ -1,11 +1,11 @@
-name: L2 SQL store
+name: L2 and L3 SQL stores
 
 on:
   pull_request:
-    paths: ['packages/financial-store-sql/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
+    paths: ['packages/financial-store-sql/**', 'packages/agent-harness/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
   push:
     branches: [main]
-    paths: ['packages/financial-store-sql/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
+    paths: ['packages/financial-store-sql/**', 'packages/agent-harness/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
 
 permissions:
   contents: read
@@ -40,5 +40,7 @@ jobs:
       - run: npm run build --workspace @praeco/evidence-intelligence
       - run: npm run build --workspace @praeco/financial-decision-kernel
       - run: npm run build --workspace @praeco/financial-store-sql
+      - run: npm run build --workspace @praeco/agent-harness
       - run: npm run typecheck --workspace @praeco/financial-store-sql
       - run: npm run test --workspace @praeco/financial-store-sql
+      - run: npm run test --workspace @praeco/agent-harness -- test/sql-harness-store.test.ts
