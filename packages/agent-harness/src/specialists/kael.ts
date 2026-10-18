@@ -67,6 +67,7 @@ export function createKaelTools(options: KaelToolsOptions): SpecialistToolDefini
 
       if (options.decisionPort) {
         const previewIntent: FinancialIntentReference = {
+          tenantId: context.principal.tenantId,
           intentId: `preview-${Date.now()}`,
           assignmentId: context.assignmentId,
           caseId: context.assignmentId,

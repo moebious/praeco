@@ -6,7 +6,7 @@ export type AssignmentId = string;
 export type PayableCaseId = string;
 export type L1EnvelopeId = string;
 export type L2DecisionId = string;
-export type SpecialistRole = 'VERA' | 'KAEL' | 'NOVA';
+export type SpecialistRole = 'VERA' | 'KAEL' | 'NOVA' | 'EVE';
 export type FinancialOutcome = 'AUTHORIZED_SIMULATED' | 'BLOCKED' | 'PENDING_HUMAN_APPROVAL';
 
 export type AssignmentState =
@@ -26,7 +26,7 @@ export interface TrustedPrincipal {
 }
 
 export interface ChannelScope {
-  provider: 'WEB' | 'EMAIL' | 'TELEGRAM' | 'SLACK' | 'WHATSAPP';
+  provider: 'WEB' | 'EMAIL' | 'TELEGRAM' | 'SLACK' | 'WHATSAPP' | 'AGENTMAIL' | string;
   installationId: string;
 }
 
@@ -142,6 +142,7 @@ export interface ExecutionEvent {
 }
 
 export interface FinancialIntentReference {
+  tenantId: TenantId;
   intentId: string;
   assignmentId: AssignmentId;
   caseId: PayableCaseId;
@@ -178,6 +179,8 @@ export interface OutboxEvent {
   commandId: string;
   payload: Record<string, unknown>;
   occurredAt: string;
+  claimedAt?: string;
+  claimExpiresAt?: string;
   dispatchedAt?: string;
 }
 
@@ -249,6 +252,8 @@ export interface AssignmentPort {
       next: AssignmentState;
       outputRefs: readonly string[];
       checkpointStage?: CheckpointStage;
+      references?: Pick<Assignment,
+        'initialL2DecisionId' | 'latestL2DecisionId' | 'l2ApprovalRequestId' | 'triggerWaitToken'>;
     },
     context: TrustedExecutionContext
   ): Promise<Assignment>;

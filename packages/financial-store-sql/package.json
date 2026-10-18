@@ -10,14 +10,17 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo": "tsx src/demo.ts"
   },
   "dependencies": {
+    "@praeco/financial-decision-kernel": "1.0.0",
     "pg": "8.23.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
+    "tsx": "^4.20.0",
     "typescript": "7.0.2",
     "vitest": "5.0.5"
   }

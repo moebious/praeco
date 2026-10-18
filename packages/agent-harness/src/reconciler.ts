@@ -1,5 +1,6 @@
 import type {
   FinancialDecisionPort,
+  OutboxEvent,
   ReconcilerTickReport,
   TenantId,
   TrustedPrincipal,
@@ -15,6 +16,9 @@ export interface HarnessReconcilerOptions {
   cadenceMs?: number;
   now?: () => string;
   onL2OutboxDrain?: (tenantId: TenantId) => Promise<number>;
+  /** Deliver or dispatch this event; resolve only after acceptance, throw to retry.
+   * Handlers must be idempotent by eventId because delivery is at least once. */
+  deliverL3Event?: (event: OutboxEvent) => Promise<void>;
 }
 
 /**
@@ -36,6 +40,7 @@ export class HarnessReconciler {
   private readonly cadenceMs: number;
   private readonly now: () => string;
   private readonly onL2OutboxDrain?: (tenantId: TenantId) => Promise<number>;
+  private readonly deliverL3Event?: (event: OutboxEvent) => Promise<void>;
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: HarnessReconcilerOptions) {
@@ -46,6 +51,7 @@ export class HarnessReconciler {
     this.cadenceMs = options.cadenceMs ?? 15_000;
     this.now = options.now ?? (() => new Date().toISOString());
     this.onL2OutboxDrain = options.onL2OutboxDrain;
+    this.deliverL3Event = options.deliverL3Event;
   }
 
   public isRunning(): boolean {
@@ -93,8 +99,21 @@ export class HarnessReconciler {
     let completedAssignmentsCount = 0;
 
     // 1. Duty 1: Outbox Draining
-    const drainedL3Events = await this.store.drainOutbox(targetTenantId);
-    drainedOutboxCount += drainedL3Events.length;
+    // Without a handler, leave events unclaimed for a configured consumer.
+    if (this.deliverL3Event) {
+      const events = await this.store.drainOutbox(targetTenantId);
+      for (const event of events) {
+        try {
+          await this.deliverL3Event(event);
+          await this.store.acknowledgeOutbox(targetTenantId, [event.eventId]);
+          drainedOutboxCount++;
+        } catch {
+          // A failed delivery (or acknowledgement) remains retryable. Do not
+          // discard other events in the batch or log untrusted payloads.
+          await this.store.failOutboxClaim(targetTenantId, [event.eventId]);
+        }
+      }
+    }
 
     if (this.onL2OutboxDrain) {
       try {

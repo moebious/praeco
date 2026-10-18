@@ -31,7 +31,7 @@ class CliEnvelopeResolver implements EnvelopeResolver {
   }
 }
 
-interface ScenarioDef {
+export interface ScenarioDef {
   id: ScenarioId;
   title: string;
   claim: string;
@@ -157,12 +157,23 @@ export function buildScenarios(): ScenarioDef[] {
   ];
 }
 
-export async function runCliDemo() {
-  console.log('\n========================================================================');
-  console.log('  PRAECO — Autonomous Financial Decision Kernel (Reto Blinka 30X)');
-  console.log('  Isolated Scenario Oracle Runner');
-  console.log('========================================================================\n');
+export interface GoldenDemoOptions {
+  /**
+   * Builds the per-scenario service. Defaults to the in-memory demo backend;
+   * an authoritative backend (ADR-003) wires its commit port here.
+   */
+  serviceForScenario?: (scenario: ScenarioDef) => Promise<FinancialAuthorizationService> | FinancialAuthorizationService;
+}
 
+export interface GoldenDemoSummary {
+  total: number;
+  matched: number;
+  mismatched: readonly ScenarioId[];
+}
+
+/** Runs the eight canonical Blinka scenarios plus the HITL approval demo and
+ *  returns the oracle summary. Expected outcomes stay test/demo-only. */
+export async function runGoldenDemo(options: GoldenDemoOptions = {}): Promise<GoldenDemoSummary> {
   const scenarios = buildScenarios();
   const workerActor: TrustedActorContext = {
     tenantId: DEMO_TENANT_ID,
@@ -177,12 +188,15 @@ export async function runCliDemo() {
 
   let pendingApprovalRequestId: string | null = null;
   let approvalService: FinancialAuthorizationService | null = null;
+  const mismatched: ScenarioId[] = [];
 
   for (const s of scenarios) {
     const store = createScenarioStore(s.id);
     const resolver = new CliEnvelopeResolver();
     resolver.register(s.envelope);
-    const service = new FinancialAuthorizationService(store, resolver);
+    const service = options.serviceForScenario
+      ? await options.serviceForScenario(s)
+      : new FinancialAuthorizationService(store, resolver);
 
     const record = await service.decideAndCommit(
       {
@@ -198,6 +212,7 @@ export async function runCliDemo() {
     );
 
     const matchesExpected = record.outcome === s.expected;
+    if (!matchesExpected) mismatched.push(s.id);
     const outcomeEmoji =
       record.outcome === 'AUTHORIZED_SIMULATED'
         ? '✅ AUTORIZADO (SIMULADO)'
@@ -239,6 +254,22 @@ export async function runCliDemo() {
     console.log(`Compromiso ID: ${approvedRecord.commitmentId}`);
     console.log(`Explicación:   ${approvedRecord.explanation}`);
     console.log('========================================================================\n');
+  }
+
+  return { total: scenarios.length, matched: scenarios.length - mismatched.length, mismatched };
+}
+
+export async function runCliDemo() {
+  console.log('\n========================================================================');
+  console.log('  PRAECO — Autonomous Financial Decision Kernel (Reto Blinka 30X)');
+  console.log('  Isolated Scenario Oracle Runner');
+  console.log('========================================================================\n');
+
+  const summary = await runGoldenDemo();
+
+  if (summary.mismatched.length > 0) {
+    console.error(`Golden set mismatch: ${summary.mismatched.join(', ')}`);
+    process.exitCode = 1;
   }
 }
 

@@ -87,70 +87,66 @@ export class TelegramChannelAdapter {
         };
       }
 
-      const challenge = await this.store.getLinkingChallenge(token);
-      if (!challenge) {
-        return {
-          chatId,
-          text: 'Linking challenge not found or invalid.',
-          actionOutcome: 'LINK_FAILED',
-        };
-      }
-
-      // Validate provider and installation
-      if (
-        challenge.provider !== 'TELEGRAM' ||
-        challenge.installationId !== update.installationId
-      ) {
-        return {
-          chatId,
-          text: 'Linking challenge does not match this Telegram installation.',
-          actionOutcome: 'LINK_FAILED',
-        };
-      }
-
-      // Validate revocation
-      if (challenge.revokedAt) {
-        return {
-          chatId,
-          text: 'Linking challenge has been revoked.',
-          actionOutcome: 'LINK_FAILED',
-        };
-      }
-
-      // Validate expiration
-      if (Date.parse(challenge.expiresAt) <= Date.now()) {
-        return {
-          chatId,
-          text: 'Linking challenge has expired. Request a new token from the dashboard.',
-          actionOutcome: 'LINK_FAILED',
-        };
-      }
-
-      // Validate single-use consumption
-      if (challenge.consumedAt) {
-        return {
-          chatId,
-          text: 'Linking challenge has already been used.',
-          actionOutcome: 'LINK_FAILED',
-        };
-      }
-
-      // Consume challenge atomically
-      challenge.consumedAt = new Date().toISOString();
-      challenge.consumedByUserId = userId;
-      await this.store.saveLinkingChallenge(challenge);
-
-      // Register external principal binding
-      await this.store.registerPrincipalBinding({
-        tenantId: challenge.tenantId,
+      // Consume challenge and bind atomically in a single transaction
+      const nowIso = new Date().toISOString();
+      const result = await this.store.consumeLinkingChallenge({
+        token,
         provider: 'TELEGRAM',
         installationId: update.installationId,
-        providerUserId: userId,
-        principalId: challenge.principalId,
-        roles: challenge.roles,
+        consumedByUserId: userId,
+        consumedAt: nowIso,
         bindingRevision: 'rev-1',
-        revoked: false,
       });
+
+      if (!result) {
+        // Detailed error diagnostic
+        const existing = await this.store.getLinkingChallenge(token);
+        if (!existing) {
+          return {
+            chatId,
+            text: 'Linking challenge not found or invalid.',
+            actionOutcome: 'LINK_FAILED',
+          };
+        }
+        if (
+          existing.provider !== 'TELEGRAM' ||
+          existing.installationId !== update.installationId
+        ) {
+          return {
+            chatId,
+            text: 'Linking challenge does not match this Telegram installation.',
+            actionOutcome: 'LINK_FAILED',
+          };
+        }
+        if (existing.revokedAt) {
+          return {
+            chatId,
+            text: 'Linking challenge has been revoked.',
+            actionOutcome: 'LINK_FAILED',
+          };
+        }
+        if (Date.parse(existing.expiresAt) <= Date.now()) {
+          return {
+            chatId,
+            text: 'Linking challenge has expired. Request a new token from the dashboard.',
+            actionOutcome: 'LINK_FAILED',
+          };
+        }
+        if (existing.consumedAt) {
+          return {
+            chatId,
+            text: 'Linking challenge has already been used.',
+            actionOutcome: 'LINK_FAILED',
+          };
+        }
+        return {
+          chatId,
+          text: 'Linking challenge could not be consumed.',
+          actionOutcome: 'LINK_FAILED',
+        };
+      }
+
+      const { challenge } = result;
 
       return {
         chatId,
@@ -216,13 +212,8 @@ export class TelegramChannelAdapter {
 
       // Look up assignment for this case
       // Match by assignment.caseId within tenant
-      let assignment = null;
-      for (const a of (this.store as any).assignments?.values?.() ?? []) {
-        if (a.tenantId === tenantId && a.caseId === caseId) {
-          assignment = a;
-          break;
-        }
-      }
+      const caseAssignments = await this.store.findAssignmentsByCase(tenantId, caseId);
+      const assignment = caseAssignments[0] ?? null;
 
       let decisionOutcome: FinancialOutcome | undefined;
       let decisionId: string | undefined;

@@ -26,6 +26,17 @@ CREATE TABLE IF NOT EXISTS obligations (
   UNIQUE (tenant_id, obligation_id)
 );
 
+CREATE TABLE IF NOT EXISTS commitments (
+  tenant_id            TEXT NOT NULL,
+  commitment_id        TEXT NOT NULL,
+  canonical_payable_key TEXT NOT NULL,
+  budget_id            TEXT NOT NULL,
+  unrounded_usd        NUMERIC NOT NULL,
+  decision_id          TEXT NOT NULL,
+  committed_at         TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (tenant_id, commitment_id)
+);
+
 CREATE TABLE IF NOT EXISTS decisions (
   decision_id TEXT PRIMARY KEY,
   tenant_id   TEXT NOT NULL,

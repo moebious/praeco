@@ -445,6 +445,7 @@ describe('L3 Slice E — Authenticated Human Approval & Durable Reconciler Daemo
   it('6. Reconciler Duty 1: outbox draining delivers undispatched events', async () => {
     const harnessStore = new InMemoryHarnessStore();
     const { decisionPort, runner } = createTestEnvironment(harnessStore);
+    const delivered: string[] = [];
 
     // Enqueue synthetic outbox event
     await harnessStore.enqueueOutbox({
@@ -461,10 +462,12 @@ describe('L3 Slice E — Authenticated Human Approval & Durable Reconciler Daemo
       decisionPort,
       workflowRunner: runner,
       defaultTenantId: DEMO_TENANT_ID,
+      deliverL3Event: async event => { delivered.push(event.eventId); },
     });
 
     const report = await reconciler.tick(DEMO_TENANT_ID);
     expect(report.drainedOutboxCount).toBe(1);
+    expect(delivered).toEqual(['out-rec-01']);
 
     // Subsequent tick sees no remaining undispatched outbox events
     const secondReport = await reconciler.tick(DEMO_TENANT_ID);
