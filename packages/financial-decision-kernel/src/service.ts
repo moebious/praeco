@@ -40,7 +40,7 @@ export class FinancialAuthorizationService {
       command.proposal.envelopeIds
     );
 
-    const context = this.buildContextSnapshot(command.agentGrantRef);
+    const context = this.buildContextSnapshot(command.agentGrantRef, command.workerId, actor.principalId);
     return evaluatePayable(envelopes, context, 'PROPOSE_PAYABLE');
   }
 
@@ -71,7 +71,7 @@ export class FinancialAuthorizationService {
       );
 
       // 3. Evaluate gates
-      const context = this.buildContextSnapshot(command.agentGrantRef);
+      const context = this.buildContextSnapshot(command.agentGrantRef, command.workerId, actor.principalId);
       const evalResult = evaluatePayable(envelopes, context, 'REQUEST_SIMULATED_AUTHORIZATION');
 
       const decisionId = `dec-${randomUUID()}`;
@@ -236,6 +236,10 @@ export class FinancialAuthorizationService {
       throw new Error('UNAUTHORIZED_ROLE: Only FinanceAdmin may resolve approvals');
     }
 
+    if (actor.tenantId !== this.store.tenantId) {
+      throw new Error('TENANT_ID_MISMATCH');
+    }
+
     return this.store.withTransaction(async () => {
       // 1. Idempotency check
       const payloadDigest = digest(canonicalJson(command));
@@ -256,6 +260,10 @@ export class FinancialAuthorizationService {
 
       if (request.status !== 'PENDING') {
         throw new Error(`APPROVAL_ALREADY_RESOLVED: ${request.status}`);
+      }
+
+      if (request.tenantId !== actor.tenantId) {
+        throw new Error('APPROVAL_TENANT_MISMATCH: approval request belongs to a different tenant');
       }
 
       const currentTime = this.now();
@@ -317,8 +325,10 @@ export class FinancialAuthorizationService {
       // Re-evaluate
       const freshEval = evaluatePayable(envelopes, context, 'REQUEST_SIMULATED_AUTHORIZATION');
 
-      // Check for hard failures (G1-G5)
-      const hardFailures = freshEval.gateChecks.slice(0, 5).filter(c => c.status === 'FAIL');
+      // Check for hard failures across ALL gates: a human approval must never
+      // bypass a gate that began failing during the wait, including a lost or
+      // revoked grant action at G6 (a hard failure, not an eligible excess).
+      const hardFailures = freshEval.gateChecks.filter(c => c.status === 'FAIL');
       if (hardFailures.length > 0) {
         // Late budget consumption or changed state blocked it!
         const record: FinancialDecisionRecord = {
@@ -428,10 +438,20 @@ export class FinancialAuthorizationService {
     });
   }
 
-  private buildContextSnapshot(grantId: string): TrustedFinancialContext {
+  private buildContextSnapshot(
+    grantId: string,
+    expectedWorkerId?: string,
+    expectedPrincipalId?: string
+  ): TrustedFinancialContext {
     const workerGrant = this.store.grants.get(grantId);
     if (!workerGrant) {
       throw new Error(`UNKNOWN_AGENT_GRANT: ${grantId}`);
+    }
+    if (expectedWorkerId !== undefined && workerGrant.workerId !== expectedWorkerId) {
+      throw new Error(`GRANT_WORKER_MISMATCH: grant ${grantId} does not authorize worker ${expectedWorkerId}`);
+    }
+    if (expectedPrincipalId !== undefined && workerGrant.workerId !== expectedPrincipalId) {
+      throw new Error(`GRANT_PRINCIPAL_MISMATCH: acting principal ${expectedPrincipalId} is not the worker bound to grant ${grantId}`);
     }
 
     return {

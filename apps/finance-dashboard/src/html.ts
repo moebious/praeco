@@ -69,6 +69,8 @@ export function renderDashboardHtml(): string {
           <span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
           <span>ENTORNO SIMULADO · SIN PAGOS REALES</span>
         </div>
+        <input id="admin-token" type="password" placeholder="Token FinanceAdmin" autocomplete="off" title="Token de administrador impreso al iniciar el servidor"
+          class="w-40 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-slate-800 border border-slate-700 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500" />
         <button onclick="openRulesModal()" class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center space-x-1.5">
           <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
           <span>Reglas de Decisión</span>
@@ -269,18 +271,25 @@ export function renderDashboardHtml(): string {
       }
     }
 
+    function adminHeaders() {
+      const token = (document.getElementById('admin-token').value || '').trim();
+      if (!token) {
+        throw new Error('Ingresa el Token FinanceAdmin (impreso al iniciar el servidor)');
+      }
+      return { 'Content-Type': 'application/json', 'x-praeco-token': token };
+    }
+
     async function approveCase(approvalRequestId, scenarioId) {
       try {
         const res = await fetch('/api/approve', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-praeco-role': 'FinanceAdmin',
-            'x-praeco-principal': 'cfo-finance-admin'
-          },
+          headers: adminHeaders(),
           body: JSON.stringify({ approvalRequestId, scenarioId })
         });
-        const updatedRecord = await res.json();
+        const updatedRecord = await res.json().catch(() => null);
+        if (!res.ok || !updatedRecord) {
+          throw new Error((updatedRecord && updatedRecord.error) || ('HTTP ' + res.status));
+        }
         // Update decision list
         const idx = currentDecisions.findIndex(d => d.scenarioId === scenarioId);
         if (idx !== -1) {
@@ -297,14 +306,13 @@ export function renderDashboardHtml(): string {
       try {
         const res = await fetch('/api/reject', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-praeco-role': 'FinanceAdmin',
-            'x-praeco-principal': 'cfo-finance-admin'
-          },
+          headers: adminHeaders(),
           body: JSON.stringify({ approvalRequestId, scenarioId })
         });
-        const updatedRecord = await res.json();
+        const updatedRecord = await res.json().catch(() => null);
+        if (!res.ok || !updatedRecord) {
+          throw new Error((updatedRecord && updatedRecord.error) || ('HTTP ' + res.status));
+        }
         const idx = currentDecisions.findIndex(d => d.scenarioId === scenarioId);
         if (idx !== -1) {
           currentDecisions[idx] = { ...currentDecisions[idx], ...updatedRecord, outcome: 'BLOCKED' };
@@ -316,7 +324,14 @@ export function renderDashboardHtml(): string {
     }
 
     async function resetState() {
-      await fetch('/api/reset', { method: 'POST' });
+      try {
+        const res = await fetch('/api/reset', { method: 'POST', headers: adminHeaders() });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error((body && body.error) || ('HTTP ' + res.status));
+      } catch (err) {
+        alert('Error al reiniciar: ' + err.message);
+        return;
+      }
       currentDecisions = [];
       await fetchRules();
       renderBoard();
@@ -471,6 +486,7 @@ export function renderDashboardHtml(): string {
 
     async function saveRules(e) {
       e.preventDefault();
+      try {
       const updated = {
         maxAutoApproveUsd: Number(document.getElementById('rule-max-auto').value).toFixed(2),
         defaultRecurringTolerancePct: Number(document.getElementById('rule-tol-pct').value).toFixed(2),
@@ -478,19 +494,22 @@ export function renderDashboardHtml(): string {
       // Only send the budget when it actually changed so canonical per-scenario seeds stay intact.
       const budgetVal = Number(document.getElementById('rule-budget').value).toFixed(2);
       if (budgetVal !== currentRules.budgetUsd) updated.budgetUsd = budgetVal;
-      await fetch('/api/rules', {
+      const res = await fetch('/api/rules', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-praeco-role': 'FinanceAdmin',
-          'x-praeco-principal': 'cfo-finance-admin'
-        },
+        headers: adminHeaders(),
         body: JSON.stringify(updated)
       });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error((body && body.error) || ('HTTP ' + res.status));
+      }
       closeRulesModal();
       await fetchRules();
       if (currentDecisions.length > 0) {
         resetAndRunAll();
+      }
+      } catch (err) {
+        alert('Error al guardar reglas: ' + err.message);
       }
     }
 
