@@ -38,6 +38,8 @@ interface WebState {
     maxAutoApproveUsd: string;
     defaultRecurringTolerancePct: string;
     budgetUsd: string;
+    /** True only after the company explicitly saves a custom budget; canonical per-scenario budgets apply otherwise. */
+    budgetCustomized: boolean;
     spentUsd: string;
   };
   activeServices: Map<string, { service: FinancialAuthorizationService; approvalRequestId?: string }>;
@@ -51,6 +53,7 @@ const state: WebState = {
     maxAutoApproveUsd: '2500.00',
     defaultRecurringTolerancePct: '5.00',
     budgetUsd: '5000.00',
+    budgetCustomized: false,
     spentUsd: '0.00',
   },
   activeServices: new Map(),
@@ -139,7 +142,10 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
         const body = await parseBody(req);
         if (body.maxAutoApproveUsd) state.rules.maxAutoApproveUsd = body.maxAutoApproveUsd;
         if (body.defaultRecurringTolerancePct) state.rules.defaultRecurringTolerancePct = body.defaultRecurringTolerancePct;
-        if (body.budgetUsd) state.rules.budgetUsd = body.budgetUsd;
+        if (body.budgetUsd) {
+          state.rules.budgetUsd = body.budgetUsd;
+          state.rules.budgetCustomized = true;
+        }
         state.rules.policyRevisionId = `pol-blinka-demo-v${++policyRevCounter}`;
         sendJson(res, 200, state.rules);
       } catch (err: any) {
@@ -150,6 +156,11 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
 
     if (req.method === 'POST' && url.pathname === '/api/reset') {
       state.activeServices.clear();
+      state.rules.policyRevisionId = 'pol-blinka-demo-v1';
+      state.rules.maxAutoApproveUsd = '2500.00';
+      state.rules.defaultRecurringTolerancePct = '5.00';
+      state.rules.budgetUsd = '5000.00';
+      state.rules.budgetCustomized = false;
       state.rules.spentUsd = '0.00';
       sendJson(res, 200, { ok: true });
       return;
@@ -168,10 +179,13 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
           store.policy.maxAutoApproveUsd = state.rules.maxAutoApproveUsd;
           store.policy.defaultRecurringTolerancePct = state.rules.defaultRecurringTolerancePct;
 
-          // Apply configured monthly budget
-          const octBudget = store.budgets.get('BUDGET-2026-10');
-          if (octBudget) {
-            octBudget.limitUsd = state.rules.budgetUsd;
+          // Apply a custom budget only when the company explicitly saved one;
+          // otherwise each scenario keeps its canonical seeded budget.
+          if (state.rules.budgetCustomized) {
+            const octBudget = store.budgets.get('BUDGET-2026-10');
+            if (octBudget) {
+              octBudget.limitUsd = state.rules.budgetUsd;
+            }
           }
 
           const resolver = new WebEnvelopeResolver();
