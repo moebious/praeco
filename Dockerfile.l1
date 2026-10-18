@@ -3,16 +3,16 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/evidence-intelligence/package.json packages/evidence-intelligence/package.json
-RUN npm ci
+RUN npm ci --workspace @praeco/evidence-intelligence
 COPY packages/evidence-intelligence/tsconfig*.json packages/evidence-intelligence/
 COPY packages/evidence-intelligence/src packages/evidence-intelligence/src
-RUN npm run build
+RUN npm run build --workspace @praeco/evidence-intelligence
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/evidence-intelligence/package.json packages/evidence-intelligence/package.json
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --workspace @praeco/evidence-intelligence && npm cache clean --force
 COPY --from=build /app/packages/evidence-intelligence/dist packages/evidence-intelligence/dist
 COPY packages/evidence-intelligence/examples packages/evidence-intelligence/examples
 RUN mkdir -p /app/.cache/praeco-l1 && chown -R node:node /app/.cache
