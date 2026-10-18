@@ -6,3 +6,6 @@ export * from './period.js';
 export * from './gates.js';
 export * from './multi-envelope.js';
 export * from './kernel.js';
+export * from './store.js';
+export * from './scenarios.js';
+export * from './service.js';
