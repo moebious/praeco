@@ -4,7 +4,7 @@ Source-backed extraction and deterministic normalization for Praeco.
 
 Praeco is repository v1. The `L1_CONTRACT_VERSION` remains `3.0.0` as the internal wire-format version.
 
-**Current status:** local source registry, Zod schemas, exact-decimal normalization, evidence verifier, immutable envelope reader and CLI are implemented. LiteParse runs locally with bundled Tesseract OCR enabled for PDFs; OCR-assisted envelopes remain review-only. Live LlamaCloud smoke has succeeded at parsing PDFs and PNG scans, but all three Extract results failed source-text citation grounding and stayed in review. See [live provider findings](../../docs/evaluation/llama-cloud-live-smoke.md). Financial authorization remains exclusively in L2.
+**Current status:** local source registry, Zod schemas, exact-decimal normalization, evidence verifier, immutable envelope reader and CLI are implemented. LiteParse runs locally with bundled Tesseract OCR enabled for PDFs; OCR-assisted envelopes remain review-only. The latest synthetic LlamaCloud smoke grounded both digital PDFs using retained labelled text; the PNG scan stayed in review because OCR fidelity and critical fields could not be verified. This is a narrow smoke result, not an accuracy or production claim. See [live provider findings](../../docs/evaluation/llama-cloud-live-smoke.md). Financial authorization remains exclusively in L2.
 
 - [Contracts](src/contracts.ts)
 - [Architecture](../../docs/architecture/evidence-intelligence.md)
