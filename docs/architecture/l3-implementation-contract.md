@@ -1,9 +1,11 @@
 # L3 — Implementation Contract: Persistent Financial AI Teammate
 
-**Status:** Implementation baseline; code not yet implemented
+**Status:** Implementation baseline; slice A (operational schema, idempotency, fencing) implemented, slices B–F in progress
 **Date:** 2026-10-17
-**Authoritative references:** ADR-001–006, L1 v3.0.0 wire contract, L2 implementation contract and eight golden scenarios
+**Authoritative references:** ADR-001–007, L1 v3.0.0 wire contract, L2 implementation contract and eight golden scenarios
 **Build order:** P0 Trigger.dev + Vercel AI SDK, Web/Email with optional Telegram adapter; P1 full Chat SDK multichannel; P2 Link and sandboxes only if justified. Eve and Pi Durable are outside this baseline; reconsideration requires a new ADR.
+
+**P0 demo runtime (ADR-007):** For the hackathon demo, L3 runs on explicit in-process deterministic stand-ins behind the `HarnessStore` and workflow-driver ports — see [ADR-007](../adr/007-in-process-demo-runtime.md). This is a labeled deviation from the Trigger.dev/Neon production composition, not a claim of durability. Slices B–F are bound by ADR-007's exit-criteria deltas: offline deterministic tests with scripted model responses (no network or live keys in CI), all eight Blinka scenarios through real L1 processing including case 04's two-source case, resolve-before-subscribe on every wait, no surface printing "PAGÓ", and direct exact-byte email intake until Chat SDK email support is validated.
 
 ## 1. Product acceptance
 
