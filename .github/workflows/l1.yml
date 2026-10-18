@@ -1,10 +1,13 @@
 name: L1 evidence intelligence
 on:
   pull_request:
-    paths: ['packages/evidence-intelligence/**', 'packages/external-document-intake/**', 'docs/architecture/**', 'docs/evaluation/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
+    # The workflow runs the whole-repo gate (npm run check), so every code path
+    # must be covered — L1 paths were already listed; L2/L3 and app changes were
+    # silently skipping CI verification.
+    paths: ['packages/**', 'apps/**', 'docs/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
   push:
     branches: [main]
-    paths: ['packages/evidence-intelligence/**', 'packages/external-document-intake/**', 'docs/architecture/**', 'docs/evaluation/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
+    paths: ['packages/**', 'apps/**', 'docs/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
 permissions:
   contents: read
 jobs:
