@@ -10,3 +10,5 @@ export * from './store.js';
 export * from './scenarios.js';
 export * from './service.js';
 export * from './l1-adapter.js';
+// Exported for the apps/finance-dashboard scenario runner; the kernel itself carries no UI.
+export { buildScenarios } from './cli.js';
