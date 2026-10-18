@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   createScenarioStore,
@@ -65,22 +66,22 @@ const workerActor: TrustedActorContext = {
   roles: ['WorkerAgent'],
 };
 
-function resolveActorFromRequest(
-  req: IncomingMessage,
-  defaultPrincipal = 'cfo-finance-admin'
-): TrustedActorContext {
-  const roleHeader = (req.headers['x-praeco-role'] as string) || '';
-  const principalId = (req.headers['x-praeco-principal'] as string) || defaultPrincipal;
-  const roles = roleHeader
-    .split(',')
-    .map(r => r.trim())
-    .filter(Boolean);
+// Demo-grade authentication: every mutating endpoint requires a server-held
+// token. Admin identity (the FinanceAdmin principal) derives from token
+// possession, never from client-supplied headers. Set PRAECO_DASHBOARD_TOKEN
+// for a stable value; otherwise a random per-process token is generated.
+const dashboardToken =
+  process.env.PRAECO_DASHBOARD_TOKEN || `praeco-demo-${randomUUID()}`;
 
-  return {
-    tenantId: DEMO_TENANT_ID,
-    principalId,
-    roles,
-  };
+const cfoActor: TrustedActorContext = {
+  tenantId: DEMO_TENANT_ID,
+  principalId: 'cfo-finance-admin',
+  roles: ['FinanceAdmin'],
+};
+
+function hasValidToken(req: IncomingMessage): boolean {
+  const provided = req.headers['x-praeco-token'];
+  return typeof provided === 'string' && provided.length > 0 && provided === dashboardToken;
 }
 
 async function parseBody(req: IncomingMessage): Promise<any> {
@@ -102,7 +103,7 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown) {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, x-praeco-role, x-praeco-principal, authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, x-praeco-token',
   });
   res.end(JSON.stringify(data));
 }
@@ -115,7 +116,7 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, x-praeco-role, x-praeco-principal, authorization',
+        'Access-Control-Allow-Headers': 'Content-Type, x-praeco-token',
       });
       res.end();
       return;
@@ -134,9 +135,8 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
 
     if (req.method === 'POST' && url.pathname === '/api/rules') {
       try {
-        const actor = resolveActorFromRequest(req);
-        if (!actor.roles.includes('FinanceAdmin')) {
-          sendJson(res, 403, { error: 'UNAUTHORIZED_ROLE: FinanceAdmin role required to modify policy rules' });
+        if (!hasValidToken(req)) {
+          sendJson(res, 403, { error: 'DASHBOARD_TOKEN_REQUIRED: set the x-praeco-token header (token is printed at server startup)' });
           return;
         }
         const body = await parseBody(req);
@@ -155,6 +155,10 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/reset') {
+      if (!hasValidToken(req)) {
+        sendJson(res, 403, { error: 'DASHBOARD_TOKEN_REQUIRED: set the x-praeco-token header (token is printed at server startup)' });
+        return;
+      }
       state.activeServices.clear();
       state.rules.policyRevisionId = 'pol-blinka-demo-v1';
       state.rules.maxAutoApproveUsd = '2500.00';
@@ -236,9 +240,8 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
 
     if (req.method === 'POST' && url.pathname === '/api/approve') {
       try {
-        const actor = resolveActorFromRequest(req);
-        if (!actor.roles.includes('FinanceAdmin')) {
-          sendJson(res, 403, { error: 'UNAUTHORIZED_ROLE: FinanceAdmin role required for approval' });
+        if (!hasValidToken(req)) {
+          sendJson(res, 403, { error: 'DASHBOARD_TOKEN_REQUIRED: set the x-praeco-token header (token is printed at server startup)' });
           return;
         }
 
@@ -252,7 +255,7 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
             idempotencyKey: `idem-approve-${approvalRequestId}`,
             action: 'APPROVE',
           },
-          actor
+          cfoActor
         );
 
         // Update spent dynamically from actual store commitments
@@ -272,9 +275,8 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
 
     if (req.method === 'POST' && url.pathname === '/api/reject') {
       try {
-        const actor = resolveActorFromRequest(req);
-        if (!actor.roles.includes('FinanceAdmin')) {
-          sendJson(res, 403, { error: 'UNAUTHORIZED_ROLE: FinanceAdmin role required for rejection' });
+        if (!hasValidToken(req)) {
+          sendJson(res, 403, { error: 'DASHBOARD_TOKEN_REQUIRED: set the x-praeco-token header (token is printed at server startup)' });
           return;
         }
 
@@ -288,7 +290,7 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
             idempotencyKey: `idem-reject-${approvalRequestId}`,
             action: 'REJECT',
           },
-          actor
+          cfoActor
         );
         sendJson(res, 200, record);
       } catch (err: any) {
@@ -300,8 +302,14 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
     sendJson(res, 404, { error: 'NOT_FOUND' });
   });
 
-  server.listen(port, () => {
-    console.log(`\n🚀 Praeco Financial Dashboard running on http://localhost:${port}\n`);
+  // Bind to loopback by default so the demo dashboard is never exposed beyond
+  // the local machine; set PRAECO_DASHBOARD_HOST to override deliberately.
+  const host = process.env.PRAECO_DASHBOARD_HOST ?? '127.0.0.1';
+  server.listen(port, host, () => {
+    console.log(`\n🚀 Praeco Financial Dashboard running on http://${host === '127.0.0.1' ? 'localhost' : host}:${port}`);
+    if (!process.env.PRAECO_DASHBOARD_TOKEN) {
+      console.log(`🔑 FinanceAdmin token for this session (set PRAECO_DASHBOARD_TOKEN to override): ${dashboardToken}\n`);
+    }
   });
 
   return server;
