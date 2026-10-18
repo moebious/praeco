@@ -9,7 +9,7 @@
     "db:status": "node --conditions=react-server --import tsx scripts/database.mts status",
     "db:migrate": "node --conditions=react-server --import tsx scripts/database.mts migrate",
     "db:smoke": "node --conditions=react-server --import tsx scripts/database.mts smoke",
-    "chat:dev": "trigger.dev dev start --config trigger.config.ts --env-file ../../.env.local --max-concurrent-runs 1 --skip-update-check --skip-telemetry",
+    "chat:dev": "trigger dev start --config trigger.config.ts --env-file ../../.env.local --max-concurrent-runs 1 --skip-update-check --skip-telemetry",
     "chat:status": "node --conditions=react-server --import tsx scripts/chat.mts status",
     "chat:smoke": "node --conditions=react-server --import tsx scripts/chat.mts smoke",
     "lint": "eslint .",

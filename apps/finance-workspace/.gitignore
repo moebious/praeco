@@ -41,3 +41,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# demo runtime artifacts (L1 evidence store); never committed, never in public/
+/.praeco-demo/

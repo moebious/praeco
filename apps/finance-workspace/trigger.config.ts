@@ -1,7 +1,4 @@
 import { defineConfig } from "@trigger.dev/sdk"
-import { prepareServerEnvironment } from "./lib/server-env"
-
-prepareServerEnvironment()
 
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_REF ?? "proj_unconfigured",

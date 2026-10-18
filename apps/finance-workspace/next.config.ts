@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
   /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
+  serverExternalPackages: ['@llamaindex/liteparse'],
   turbopack: {
     rules: {
       "*.css": {
