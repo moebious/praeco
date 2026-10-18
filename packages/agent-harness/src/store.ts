@@ -11,6 +11,7 @@ import type {
   FinancialDecisionReference,
   FinancialIntentReference,
   InboundEventReceipt,
+  LinkingChallenge,
   OutboxEvent,
   PayableCase,
   PayableCaseId,
@@ -28,7 +29,24 @@ export interface HarnessStore {
     providerUserId: string
   ): Promise<ExternalPrincipalBinding | null>;
 
+  findPrincipalBindingsByUser(
+    provider: string,
+    installationId: string,
+    providerUserId: string
+  ): Promise<readonly ExternalPrincipalBinding[]>;
+
   registerPrincipalBinding(binding: ExternalPrincipalBinding): Promise<void>;
+
+  revokePrincipalBinding(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    providerUserId: string
+  ): Promise<void>;
+
+  // Linking challenges
+  saveLinkingChallenge(challenge: LinkingChallenge): Promise<void>;
+  getLinkingChallenge(token: string): Promise<LinkingChallenge | null>;
 
   // Agent principals
   getAgentPrincipal(tenantId: TenantId, principalId: string): Promise<AgentPrincipal | null>;
@@ -108,6 +126,7 @@ export class InMemoryHarnessStore implements HarnessStore {
   public readonly financialDecisions = new Map<string, FinancialDecisionReference>();
   public readonly executionEvents: ExecutionEvent[] = [];
   public readonly outboxEvents: OutboxEvent[] = [];
+  public readonly linkingChallenges = new Map<string, LinkingChallenge>();
 
   private inboundKey(tenant: string, prov: string, inst: string, evt: string): string {
     return `${tenant}:${prov}:${inst}:${evt}`;
@@ -143,6 +162,24 @@ export class InMemoryHarnessStore implements HarnessStore {
     return this.principalBindings.get(key) ?? null;
   }
 
+  async findPrincipalBindingsByUser(
+    provider: string,
+    installationId: string,
+    providerUserId: string
+  ): Promise<readonly ExternalPrincipalBinding[]> {
+    const matches: ExternalPrincipalBinding[] = [];
+    for (const b of this.principalBindings.values()) {
+      if (
+        b.provider === provider &&
+        b.installationId === installationId &&
+        b.providerUserId === providerUserId
+      ) {
+        matches.push({ ...b });
+      }
+    }
+    return matches;
+  }
+
   async registerPrincipalBinding(binding: ExternalPrincipalBinding): Promise<void> {
     const key = this.bindingKey(
       binding.tenantId,
@@ -151,6 +188,32 @@ export class InMemoryHarnessStore implements HarnessStore {
       binding.providerUserId
     );
     this.principalBindings.set(key, { ...binding });
+  }
+
+  async revokePrincipalBinding(
+    tenantId: TenantId,
+    provider: string,
+    installationId: string,
+    providerUserId: string
+  ): Promise<void> {
+    const key = this.bindingKey(tenantId, provider, installationId, providerUserId);
+    const existing = this.principalBindings.get(key);
+    if (existing) {
+      existing.revoked = true;
+    }
+  }
+
+  async saveLinkingChallenge(challenge: LinkingChallenge): Promise<void> {
+    this.linkingChallenges.set(challenge.token, {
+      ...challenge,
+      roles: [...challenge.roles],
+    });
+  }
+
+  async getLinkingChallenge(token: string): Promise<LinkingChallenge | null> {
+    const ch = this.linkingChallenges.get(token);
+    if (!ch) return null;
+    return { ...ch, roles: [...ch.roles] };
   }
 
   async getAgentPrincipal(tenantId: TenantId, principalId: string): Promise<AgentPrincipal | null> {

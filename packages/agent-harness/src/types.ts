@@ -213,6 +213,19 @@ export interface ExternalPrincipalBinding {
   revoked: boolean;
 }
 
+export interface LinkingChallenge {
+  token: string;
+  tenantId: TenantId;
+  principalId: string;
+  roles: readonly string[];
+  provider: InboundMessageCommand['provider'];
+  installationId: string;
+  expiresAt: string;
+  consumedAt?: string;
+  consumedByUserId?: string;
+  revokedAt?: string;
+}
+
 export interface AssignmentPort {
   createOrLoad(
     input: InboundMessageCommand,
