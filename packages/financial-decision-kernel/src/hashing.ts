@@ -61,7 +61,6 @@ export interface IntentDigestPayload {
   amount: string;
   currency: string;
   usdEquivalent: string;
-  envelopeIds: readonly string[];
   accountFingerprint: string;
   contractRef: string | null;
   budgetPeriod: string;

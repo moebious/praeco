@@ -60,18 +60,18 @@ export function renderDashboardHtml(): string {
             <h1 class="text-lg font-bold tracking-tight text-white">PRAECO</h1>
             <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">30X Hackathon · Reto Blinka</span>
           </div>
-          <p class="text-xs text-slate-400">Agentes que pagan por la empresa · Gobernanza Financiera Determinista</p>
+          <p class="text-xs text-slate-400">Decisión autónoma y gobernada de cuentas por pagar · Simulación sin movimiento real de dinero</p>
         </div>
       </div>
 
       <div class="flex items-center space-x-3">
         <div class="flex items-center space-x-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-mono">
           <span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
-          <span>ENTORNO SIMULADO</span>
+          <span>ENTORNO SIMULADO · SIN PAGOS REALES</span>
         </div>
         <button onclick="openRulesModal()" class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center space-x-1.5">
           <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
-          <span>Reglas de Pago</span>
+          <span>Reglas de Decisión</span>
         </button>
         <button onclick="resetAndRunAll()" id="btn-run-all" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20 transition flex items-center space-x-1.5">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
@@ -114,17 +114,17 @@ export function renderDashboardHtml(): string {
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full">
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-      <!-- COLUMN 1: PAGÓ / AUTORIZÓ SIMULADO -->
+      <!-- COLUMN 1: AUTORIZADO (SIMULADO) -->
       <div class="flex flex-col rounded-xl border border-emerald-500/20 bg-slate-900/30 p-4">
         <div class="flex items-center justify-between pb-3 border-b border-emerald-500/20 mb-4">
           <div class="flex items-center space-x-2">
             <span class="h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
-            <h2 class="font-semibold text-sm text-slate-100">PAGÓ (AUTORIZADO)</h2>
+            <h2 class="font-semibold text-sm text-slate-100">AUTORIZADO (SIMULADO)</h2>
           </div>
           <span id="count-paid" class="text-xs font-mono font-medium px-2 py-0.5 rounded-full badge-paid">0</span>
         </div>
         <div id="col-paid" class="space-y-3 flex-1">
-          <p class="text-xs text-slate-500 italic text-center py-8">No hay facturas autorizadas aún. Haz clic en "Ejecutar Lote".</p>
+          <p class="text-xs text-slate-500 italic text-center py-8">No hay facturas autorizadas (simuladas) aún. Haz clic en "Ejecutar Lote".</p>
         </div>
       </div>
 
@@ -271,7 +271,11 @@ export function renderDashboardHtml(): string {
       try {
         const res = await fetch('/api/approve', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-praeco-role': 'FinanceAdmin',
+            'x-praeco-principal': 'cfo-finance-admin'
+          },
           body: JSON.stringify({ approvalRequestId, scenarioId })
         });
         const updatedRecord = await res.json();
@@ -291,7 +295,11 @@ export function renderDashboardHtml(): string {
       try {
         const res = await fetch('/api/reject', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-praeco-role': 'FinanceAdmin',
+            'x-praeco-principal': 'cfo-finance-admin'
+          },
           body: JSON.stringify({ approvalRequestId, scenarioId })
         });
         const updatedRecord = await res.json();
@@ -402,7 +410,7 @@ export function renderDashboardHtml(): string {
       const badge = document.getElementById('modal-audit-badge');
       if (item.outcome === 'AUTHORIZED_SIMULATED') {
         badge.className = 'px-2.5 py-1 rounded text-xs font-mono font-bold badge-paid';
-        badge.textContent = 'PAGÓ (AUTORIZADO)';
+        badge.textContent = 'AUTORIZADO (SIMULADO)';
       } else if (item.outcome === 'BLOCKED') {
         badge.className = 'px-2.5 py-1 rounded text-xs font-mono font-bold badge-blocked';
         badge.textContent = 'FRENÓ (BLOQUEADO)';
@@ -468,7 +476,11 @@ export function renderDashboardHtml(): string {
       };
       await fetch('/api/rules', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-praeco-role': 'FinanceAdmin',
+          'x-praeco-principal': 'cfo-finance-admin'
+        },
         body: JSON.stringify(updated)
       });
       closeRulesModal();

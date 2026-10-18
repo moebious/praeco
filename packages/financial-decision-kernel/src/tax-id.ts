@@ -20,6 +20,6 @@ export function buildCanonicalPayableKey(
   if (!cleanTaxId) {
     throw new Error('TAX_ID_EMPTY_OR_UNRESOLVABLE');
   }
-  const cleanInvNum = invoiceNumber.trim();
+  const cleanInvNum = invoiceNumber.trim().normalize('NFC').toUpperCase();
   return `${tenantId.length}:${tenantId}:${cleanTaxId.length}:${cleanTaxId}:${cleanInvNum.length}:${cleanInvNum}`;
 }

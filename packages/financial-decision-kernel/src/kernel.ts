@@ -90,7 +90,6 @@ export function evaluatePayable(
     amount: payable.amount,
     currency: payable.currency,
     usdEquivalent: unroundedUsd.toString(),
-    envelopeIds: envelopes.map(e => e.envelopeId),
     accountFingerprint,
     contractRef: inv.commercial.contractReference.value ?? null,
     budgetPeriod: period,

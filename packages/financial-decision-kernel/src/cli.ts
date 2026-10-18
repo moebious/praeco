@@ -200,7 +200,7 @@ export async function runCliDemo() {
     const matchesExpected = record.outcome === s.expected;
     const outcomeEmoji =
       record.outcome === 'AUTHORIZED_SIMULATED'
-        ? '✅ PAGÓ (AUTORIZADO)'
+        ? '✅ AUTORIZADO (SIMULADO)'
         : record.outcome === 'PENDING_HUMAN_APPROVAL'
         ? '⏳ ESCALÓ (PENDIENTE)'
         : '🛑 FRENÓ (BLOQUEADO)';

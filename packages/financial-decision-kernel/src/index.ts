@@ -9,3 +9,4 @@ export * from './kernel.js';
 export * from './store.js';
 export * from './scenarios.js';
 export * from './service.js';
+export * from './l1-adapter.js';

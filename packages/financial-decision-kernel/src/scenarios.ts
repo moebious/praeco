@@ -1,5 +1,9 @@
 import { TransactionalFinancialStore } from './store.js';
-import { computeAccountFingerprint, DEFAULT_SYNTHETIC_HMAC_KEY } from './hashing.js';
+import {
+  computeAccountFingerprint,
+  computeIntentDigest,
+  DEFAULT_SYNTHETIC_HMAC_KEY,
+} from './hashing.js';
 import { buildCanonicalPayableKey } from './tax-id.js';
 import type { PaymentAccountClaim } from '@praeco/evidence-intelligence';
 
@@ -69,6 +73,32 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
       store.contracts.set('CTR-BOG-01', {
         contractId: 'CTR-BOG-01',
         vendorId: 'VENDOR-BOG',
+        mode: 'EXACT',
+        amount: '2200.00',
+        currency: 'USD',
+        effectiveFrom: '2026-01-01',
+      });
+
+      // Also register exact synthetic demo-day vendor and contract from 01.pdf
+      const synBogAccount: PaymentAccountClaim = {
+        rail: 'BANK',
+        accountIdentifier: 'SYN-BOG-ACCOUNT-A',
+      };
+      const synBogFingerprint = computeAccountFingerprint(
+        DEMO_TENANT_ID,
+        synBogAccount,
+        DEFAULT_SYNTHETIC_HMAC_KEY
+      );
+      store.vendors.set('VENDOR-SYN-BOG', {
+        vendorId: 'VENDOR-SYN-BOG',
+        legalName: 'Synthetic Bogota Developer',
+        taxId: 'SYN-TAX-BOG',
+        isAllowlisted: true,
+        paymentAccountFingerprint: synBogFingerprint,
+      });
+      store.contracts.set('SYN-CONTRACT-1', {
+        contractId: 'SYN-CONTRACT-1',
+        vendorId: 'VENDOR-SYN-BOG',
         mode: 'EXACT',
         amount: '2200.00',
         currency: 'USD',
@@ -195,17 +225,29 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         committedUsd: '2200.00',
         revision: 1,
       });
-      // Preseeded obligation with matching canonical key
+      // Preseeded obligation with matching canonical key AND matching intent digest (real duplicate)
       const canonicalKey = buildCanonicalPayableKey(
         DEMO_TENANT_ID,
         'CO-900.123.456-7',
         'BOG-2026-10'
       );
+      const matchingDigest = computeIntentDigest({
+        tenantId: DEMO_TENANT_ID,
+        canonicalPayableKey: canonicalKey,
+        amount: '2200.00',
+        currency: 'USD',
+        usdEquivalent: '2200',
+        accountFingerprint: defaultFingerprint,
+        contractRef: null,
+        budgetPeriod: '2026-10',
+        policyRevisionId: 'pol-blinka-demo-v1',
+        grantRevisionId: 'grant-rev-1',
+      });
       store.obligations.set(canonicalKey, {
         obligationId: 'ob-preseeded-bogota',
         tenantId: DEMO_TENANT_ID,
         canonicalKey,
-        intentDigestSha256: 'preseeded-matching-digest',
+        intentDigestSha256: matchingDigest,
         status: 'COMMITTED',
         committedUsd: '2200.00',
         authorizedAt: '2026-10-15T10:00:00Z',

@@ -7,6 +7,7 @@ import {
   type ReadyInvoiceEnvelope,
   type TrustedActorContext,
 } from '../index.js';
+import { decimal } from '../decimal.js';
 import { renderDashboardHtml } from './html.js';
 import { buildScenarios } from '../cli.js';
 
@@ -33,6 +34,7 @@ class WebEnvelopeResolver implements EnvelopeResolver {
 
 interface WebState {
   rules: {
+    policyRevisionId: string;
     maxAutoApproveUsd: string;
     defaultRecurringTolerancePct: string;
     budgetUsd: string;
@@ -41,8 +43,11 @@ interface WebState {
   activeServices: Map<string, { service: FinancialAuthorizationService; approvalRequestId?: string }>;
 }
 
+let policyRevCounter = 1;
+
 const state: WebState = {
   rules: {
+    policyRevisionId: 'pol-blinka-demo-v1',
     maxAutoApproveUsd: '2500.00',
     defaultRecurringTolerancePct: '5.00',
     budgetUsd: '5000.00',
@@ -57,11 +62,23 @@ const workerActor: TrustedActorContext = {
   roles: ['WorkerAgent'],
 };
 
-const cfoActor: TrustedActorContext = {
-  tenantId: DEMO_TENANT_ID,
-  principalId: 'cfo-finance-admin',
-  roles: ['FinanceAdmin'],
-};
+function resolveActorFromRequest(
+  req: IncomingMessage,
+  defaultPrincipal = 'cfo-finance-admin'
+): TrustedActorContext {
+  const roleHeader = (req.headers['x-praeco-role'] as string) || '';
+  const principalId = (req.headers['x-praeco-principal'] as string) || defaultPrincipal;
+  const roles = roleHeader
+    .split(',')
+    .map(r => r.trim())
+    .filter(Boolean);
+
+  return {
+    tenantId: DEMO_TENANT_ID,
+    principalId,
+    roles,
+  };
+}
 
 async function parseBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -82,7 +99,7 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown) {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, x-praeco-role, x-praeco-principal, authorization',
   });
   res.end(JSON.stringify(data));
 }
@@ -95,7 +112,7 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Headers': 'Content-Type, x-praeco-role, x-praeco-principal, authorization',
       });
       res.end();
       return;
@@ -114,10 +131,16 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
 
     if (req.method === 'POST' && url.pathname === '/api/rules') {
       try {
+        const actor = resolveActorFromRequest(req);
+        if (!actor.roles.includes('FinanceAdmin')) {
+          sendJson(res, 403, { error: 'UNAUTHORIZED_ROLE: FinanceAdmin role required to modify policy rules' });
+          return;
+        }
         const body = await parseBody(req);
         if (body.maxAutoApproveUsd) state.rules.maxAutoApproveUsd = body.maxAutoApproveUsd;
         if (body.defaultRecurringTolerancePct) state.rules.defaultRecurringTolerancePct = body.defaultRecurringTolerancePct;
         if (body.budgetUsd) state.rules.budgetUsd = body.budgetUsd;
+        state.rules.policyRevisionId = `pol-blinka-demo-v${++policyRevCounter}`;
         sendJson(res, 200, state.rules);
       } catch (err: any) {
         sendJson(res, 400, { error: err.message });
@@ -136,14 +159,20 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
       try {
         const scenarios = buildScenarios();
         state.activeServices.clear();
-        let totalSpent = 0;
         const results = [];
 
         for (const s of scenarios) {
           const store = createScenarioStore(s.id);
-          // Apply custom rules if configured
+          // Apply custom rules if configured with updated policyRevisionId
+          store.policy.policyRevisionId = state.rules.policyRevisionId;
           store.policy.maxAutoApproveUsd = state.rules.maxAutoApproveUsd;
           store.policy.defaultRecurringTolerancePct = state.rules.defaultRecurringTolerancePct;
+
+          // Apply configured monthly budget
+          const octBudget = store.budgets.get('BUDGET-2026-10');
+          if (octBudget) {
+            octBudget.limitUsd = state.rules.budgetUsd;
+          }
 
           const resolver = new WebEnvelopeResolver();
           resolver.register(s.envelope);
@@ -155,18 +184,12 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
                 payableCaseId: `case-${s.id.toLowerCase()}`,
                 envelopeIds: [s.envelope.envelopeId],
               },
-              idempotencyKey: `idem-web-${s.id}-${Date.now()}`,
+              idempotencyKey: `idem-web-${s.id}`,
               workerId: 'worker-agent-demo',
               agentGrantRef: 'grant-synthetic-worker',
             },
             workerActor
           );
-
-          if (record.outcome === 'AUTHORIZED_SIMULATED') {
-            const payable = s.envelope.normalization.candidatePayable!;
-            const usd = payable.currency === 'USD' ? Number(payable.amount) : Number(payable.amount) / (payable.currency === 'COP' ? 4000 : 20);
-            totalSpent += usd;
-          }
 
           state.activeServices.set(s.id, {
             service,
@@ -182,6 +205,13 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
           });
         }
 
+        // Sum actual commitments across all active stores using exact decimals
+        let totalSpent = decimal(0);
+        for (const entry of state.activeServices.values()) {
+          for (const c of entry.service.store.commitments.values()) {
+            totalSpent = totalSpent.add(decimal(c.unroundedUsd));
+          }
+        }
         state.rules.spentUsd = totalSpent.toFixed(2);
         sendJson(res, 200, { decisions: results, spentUsd: state.rules.spentUsd });
       } catch (err: any) {
@@ -192,6 +222,12 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
 
     if (req.method === 'POST' && url.pathname === '/api/approve') {
       try {
+        const actor = resolveActorFromRequest(req);
+        if (!actor.roles.includes('FinanceAdmin')) {
+          sendJson(res, 403, { error: 'UNAUTHORIZED_ROLE: FinanceAdmin role required for approval' });
+          return;
+        }
+
         const { approvalRequestId, scenarioId } = await parseBody(req);
         const entry = state.activeServices.get(scenarioId);
         if (!entry) throw new Error('SESSION_NOT_FOUND');
@@ -202,11 +238,17 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
             idempotencyKey: `idem-approve-${approvalRequestId}`,
             action: 'APPROVE',
           },
-          cfoActor
+          actor
         );
 
-        // Update spent
-        state.rules.spentUsd = (Number(state.rules.spentUsd) + 3800).toFixed(2);
+        // Update spent dynamically from actual store commitments
+        let totalSpent = decimal(0);
+        for (const e of state.activeServices.values()) {
+          for (const c of e.service.store.commitments.values()) {
+            totalSpent = totalSpent.add(decimal(c.unroundedUsd));
+          }
+        }
+        state.rules.spentUsd = totalSpent.toFixed(2);
         sendJson(res, 200, record);
       } catch (err: any) {
         sendJson(res, 400, { error: err.message });
@@ -216,6 +258,12 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
 
     if (req.method === 'POST' && url.pathname === '/api/reject') {
       try {
+        const actor = resolveActorFromRequest(req);
+        if (!actor.roles.includes('FinanceAdmin')) {
+          sendJson(res, 403, { error: 'UNAUTHORIZED_ROLE: FinanceAdmin role required for rejection' });
+          return;
+        }
+
         const { approvalRequestId, scenarioId } = await parseBody(req);
         const entry = state.activeServices.get(scenarioId);
         if (!entry) throw new Error('SESSION_NOT_FOUND');
@@ -226,7 +274,7 @@ export function startWebServer(port = Number(process.env.PORT || 3000)) {
             idempotencyKey: `idem-reject-${approvalRequestId}`,
             action: 'REJECT',
           },
-          cfoActor
+          actor
         );
         sendJson(res, 200, record);
       } catch (err: any) {

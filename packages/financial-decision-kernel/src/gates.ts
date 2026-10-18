@@ -84,7 +84,7 @@ export function evaluateGateG2(
     return {
       gate: 'G2',
       status: 'FAIL',
-      code: 'DUPLICATE_EXISTING_AUTHORIZATION',
+      code: 'G2_DUPLICATE',
       explanation: 'Cobro duplicado: ya existe una autorización previa para esta factura y proveedor.',
       evidenceRefs: [],
       authoritativeRecordRefs: [existing.obligationId],
@@ -196,17 +196,81 @@ export function evaluateGateG4(
     };
   }
 
-  const contract = context.contracts.find(c => c.vendorId === vendorId);
-  if (!contract) {
+  // 1. Filter contracts by vendor
+  let matchingContracts = context.contracts.filter(c => c.vendorId === vendorId);
+
+  // 2. If invoice specifies a contract reference, match on contractId
+  const observedContractRef =
+    envelope.invoice.commercial.contractReference.state === 'OBSERVED'
+      ? envelope.invoice.commercial.contractReference.value
+      : undefined;
+
+  if (observedContractRef) {
+    matchingContracts = matchingContracts.filter(c => c.contractId === observedContractRef);
+    if (matchingContracts.length === 0) {
+      return {
+        gate: 'G4',
+        status: 'FAIL',
+        code: 'CONTRACT_NOT_FOUND',
+        explanation: `El contrato referenciado (${observedContractRef}) no coincide con los contratos autorizados para el proveedor.`,
+        evidenceRefs: getEvidenceIds(envelope.invoice.commercial.contractReference),
+        authoritativeRecordRefs: [],
+      };
+    }
+  }
+
+  // 3. Filter by contract validity period
+  const invoiceDate =
+    envelope.invoice.invoice.issueDate.state === 'OBSERVED' && envelope.invoice.invoice.issueDate.value
+      ? envelope.invoice.invoice.issueDate.value
+      : envelope.invoice.invoice.dueDate.state === 'OBSERVED' && envelope.invoice.invoice.dueDate.value
+      ? envelope.invoice.invoice.dueDate.value
+      : undefined;
+
+  if (invoiceDate) {
+    const validContracts = matchingContracts.filter(c => {
+      if (c.effectiveFrom && invoiceDate < c.effectiveFrom) return false;
+      if (c.effectiveTo && invoiceDate > c.effectiveTo) return false;
+      return true;
+    });
+
+    if (validContracts.length === 0 && matchingContracts.length > 0) {
+      return {
+        gate: 'G4',
+        status: 'FAIL',
+        code: 'CONTRACT_EXPIRED',
+        explanation: `El contrato no está vigente para la fecha de facturación (${invoiceDate}).`,
+        evidenceRefs: getEvidenceIds(envelope.invoice.invoice.issueDate),
+        authoritativeRecordRefs: matchingContracts.map(c => c.contractId),
+      };
+    }
+    matchingContracts = validContracts;
+  }
+
+  // 4. Ambiguity / Not Found check
+  if (matchingContracts.length === 0) {
     return {
       gate: 'G4',
       status: 'FAIL',
       code: 'CONTRACT_NOT_FOUND',
-      explanation: 'No se encontró un contrato activo para el proveedor.',
+      explanation: 'No se encontró un contrato activo y vigente para el proveedor.',
       evidenceRefs: [],
       authoritativeRecordRefs: [],
     };
   }
+
+  if (matchingContracts.length > 1) {
+    return {
+      gate: 'G4',
+      status: 'FAIL',
+      code: 'AMBIGUOUS_CONTRACT_MATCH',
+      explanation: 'Múltiples contratos activos encontrados para el proveedor; se requiere desambiguación explícita.',
+      evidenceRefs: [],
+      authoritativeRecordRefs: matchingContracts.map(c => c.contractId),
+    };
+  }
+
+  const contract = matchingContracts[0]!;
 
   const payable = envelope.normalization.candidatePayable!;
   if (payable.currency !== contract.currency) {

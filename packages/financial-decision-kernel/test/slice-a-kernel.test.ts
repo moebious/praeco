@@ -225,7 +225,6 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
         amount: '2200.00',
         currency: 'USD',
         usdEquivalent: '2200',
-        envelopeIds: [envelope.envelopeId],
         accountFingerprint: computeAccountFingerprint('tenant-acme', makeSyntheticAccount()),
         contractRef: null,
         budgetPeriod: '2026-10',
@@ -251,7 +250,7 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
       expect(result.outcome).toBe('BLOCKED');
       const g2 = result.gateChecks.find(c => c.gate === 'G2');
       expect(g2?.status).toBe('FAIL');
-      expect(g2?.code).toBe('DUPLICATE_EXISTING_AUTHORIZATION');
+      expect(g2?.code).toBe('G2_DUPLICATE');
     });
 
     it('Case 06: New Colombian beneficiary not allowlisted -> BLOCKED', () => {
@@ -647,6 +646,100 @@ describe('L2 Slice A — Pure Decision Kernel', () => {
       const g2 = result.gateChecks.find(c => c.gate === 'G2');
       expect(g2?.status).toBe('FAIL');
       expect(g2?.code).toBe('G2_CONFLICT');
+    });
+
+    it('V-5: normalizes invoice number with NFC and uppercase folding to prevent duplicate bypass', () => {
+      const keyUpper = buildCanonicalPayableKey('tenant-acme', 'CO-900.123.456-7', 'BOG-2026-10');
+      const keyLower = buildCanonicalPayableKey('tenant-acme', 'CO-900.123.456-7', '  bog-2026-10  ');
+      expect(keyUpper).toBe(keyLower);
+
+      // Composed vs decomposed Unicode
+      const keyComposed = buildCanonicalPayableKey('tenant-acme', 'CO-900.123.456-7', 'FAC-\u00C9-01');
+      const keyDecomposed = buildCanonicalPayableKey('tenant-acme', 'CO-900.123.456-7', 'fac-E\u0301-01');
+      expect(keyComposed).toBe(keyDecomposed);
+    });
+
+    it('V-7: G4 contract matching fails with CONTRACT_EXPIRED when contract is out of validity window', () => {
+      const envelope = createSyntheticEnvelope({
+        invoiceNumber: 'BOG-2026-10',
+        amount: '2200.00',
+        currency: 'USD',
+        taxId: 'CO-900.123.456-7',
+      });
+
+      const context = createTestFinancialContext({
+        vendors: [
+          {
+            vendorId: 'VENDOR-BOG',
+            legalName: 'Bogota Contractor',
+            taxId: 'CO-900.123.456-7',
+            isAllowlisted: true,
+            paymentAccountFingerprint: computeAccountFingerprint('tenant-acme', makeSyntheticAccount()),
+          },
+        ],
+        contracts: [
+          {
+            contractId: 'CTR-BOG-EXPIRED',
+            vendorId: 'VENDOR-BOG',
+            mode: 'EXACT',
+            amount: '2200.00',
+            currency: 'USD',
+            effectiveFrom: '2025-01-01',
+            effectiveTo: '2025-12-31', // Expired before 2026-10 invoice date!
+          },
+        ],
+      });
+
+      const result = evaluatePayable([envelope], context);
+      expect(result.outcome).toBe('BLOCKED');
+      const g4 = result.gateChecks.find(c => c.gate === 'G4');
+      expect(g4?.status).toBe('FAIL');
+      expect(g4?.code).toBe('CONTRACT_EXPIRED');
+    });
+
+    it('V-7: G4 contract matching fails with AMBIGUOUS_CONTRACT_MATCH if multiple contracts match without reference', () => {
+      const envelope = createSyntheticEnvelope({
+        invoiceNumber: 'BOG-2026-10',
+        amount: '2200.00',
+        currency: 'USD',
+        taxId: 'CO-900.123.456-7',
+      });
+
+      const context = createTestFinancialContext({
+        vendors: [
+          {
+            vendorId: 'VENDOR-BOG',
+            legalName: 'Bogota Contractor',
+            taxId: 'CO-900.123.456-7',
+            isAllowlisted: true,
+            paymentAccountFingerprint: computeAccountFingerprint('tenant-acme', makeSyntheticAccount()),
+          },
+        ],
+        contracts: [
+          {
+            contractId: 'CTR-BOG-01',
+            vendorId: 'VENDOR-BOG',
+            mode: 'EXACT',
+            amount: '2200.00',
+            currency: 'USD',
+            effectiveFrom: '2026-01-01',
+          },
+          {
+            contractId: 'CTR-BOG-02',
+            vendorId: 'VENDOR-BOG',
+            mode: 'CEILING',
+            amount: '5000.00',
+            currency: 'USD',
+            effectiveFrom: '2026-01-01',
+          },
+        ],
+      });
+
+      const result = evaluatePayable([envelope], context);
+      expect(result.outcome).toBe('BLOCKED');
+      const g4 = result.gateChecks.find(c => c.gate === 'G4');
+      expect(g4?.status).toBe('FAIL');
+      expect(g4?.code).toBe('AMBIGUOUS_CONTRACT_MATCH');
     });
   });
 });

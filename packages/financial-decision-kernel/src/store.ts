@@ -18,6 +18,8 @@ export interface ApprovalRequestRecord {
   unroundedUsd: string;
   budgetId: string;
   budgetLimitRevision: number;
+  originatingWorkerGrantRef: string;
+  policyRevisionId: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
   createdAt: string; // ISOInstant
   expiresAt: string; // createdAt + 24h

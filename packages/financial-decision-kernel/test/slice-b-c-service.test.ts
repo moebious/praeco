@@ -409,5 +409,104 @@ describe('L2 Slices B & C — Transactional Store, Commit, and Concurrency', () 
       expect(approvalRecord.outcome).toBe('BLOCKED');
       expect(approvalRecord.explanation).toContain('INSUFFICIENT_PERIOD_BUDGET');
     });
+
+    it('V-8: fails closed when agentGrantRef is unresolvable', async () => {
+      const store = createScenarioStore('BLINKA-01');
+      const resolver = new InMemoryEnvelopeResolver();
+      const service = new FinancialAuthorizationService(store, resolver);
+
+      const env = createSyntheticEnvelope({
+        tenantId: DEMO_TENANT_ID,
+        envelopeId: 'env-grant-fail',
+        invoiceNumber: 'BOG-2026-10',
+        taxId: 'CO-900.123.456-7',
+        amount: '2200.00',
+        currency: 'USD',
+      });
+      resolver.register(env);
+
+      await expect(
+        service.decideAndCommit(
+          {
+            proposal: { payableCaseId: 'case-bogota-01', envelopeIds: ['env-grant-fail'] },
+            idempotencyKey: 'idem-unknown-grant',
+            workerId: 'worker-agent-demo',
+            agentGrantRef: 'non-existent-grant',
+          },
+          actorWorker
+        )
+      ).rejects.toThrow('UNKNOWN_AGENT_GRANT: non-existent-grant');
+    });
+
+    it('V-9: rejects approval with APPROVAL_STALE when company policy revision changes during wait', async () => {
+      const store = createScenarioStore('BLINKA-03');
+      const resolver = new InMemoryEnvelopeResolver();
+      const service = new FinancialAuthorizationService(store, resolver);
+
+      const env = createSyntheticEnvelope({
+        tenantId: DEMO_TENANT_ID,
+        envelopeId: 'env-mex-stale-pol',
+        invoiceNumber: 'MEX-2026-10',
+        taxId: 'MX-DESIGN-AGENCY',
+        amount: '76000.00',
+        currency: 'MXN',
+      });
+      resolver.register(env);
+
+      const record = await service.decideAndCommit(
+        {
+          proposal: { payableCaseId: 'case-blinka-03', envelopeIds: ['env-mex-stale-pol'] },
+          idempotencyKey: 'idem-mex-stale-cmd',
+          workerId: 'worker-agent-demo',
+          agentGrantRef: 'grant-synthetic-worker',
+        },
+        actorWorker
+      );
+
+      // Mutate policy revision during wait
+      store.policy.policyRevisionId = 'pol-blinka-demo-v2-updated';
+
+      await expect(
+        service.resolveApproval(
+          {
+            approvalRequestId: record.approvalRequestId!,
+            idempotencyKey: 'idem-stale-pol-approve',
+            action: 'APPROVE',
+          },
+          actorCFO
+        )
+      ).rejects.toThrow('APPROVAL_STALE: Company policy revision changed');
+    });
+
+    it('V-6: Scenario 05 forwarded duplicate correctly returns G2_DUPLICATE through service', async () => {
+      const store = createScenarioStore('BLINKA-05');
+      const resolver = new InMemoryEnvelopeResolver();
+      const service = new FinancialAuthorizationService(store, resolver);
+
+      const env = createSyntheticEnvelope({
+        tenantId: DEMO_TENANT_ID,
+        envelopeId: 'env-bogota-duplicate-transport',
+        invoiceNumber: 'BOG-2026-10',
+        taxId: 'CO-900.123.456-7',
+        amount: '2200.00',
+        currency: 'USD',
+      });
+      resolver.register(env);
+
+      const record = await service.decideAndCommit(
+        {
+          proposal: { payableCaseId: 'case-blinka-05', envelopeIds: ['env-bogota-duplicate-transport'] },
+          idempotencyKey: 'idem-bogota-dup',
+          workerId: 'worker-agent-demo',
+          agentGrantRef: 'grant-synthetic-worker',
+        },
+        actorWorker
+      );
+
+      expect(record.outcome).toBe('BLOCKED');
+      const g2 = record.gateChecks.find(c => c.gate === 'G2');
+      expect(g2?.status).toBe('FAIL');
+      expect(g2?.code).toBe('G2_DUPLICATE');
+    });
   });
 });

@@ -21,7 +21,8 @@ export interface EnvelopeResolver {
 
 export class FinancialAuthorizationService {
   constructor(
-    private readonly store: TransactionalFinancialStore,
+    /** Public read access is intentional: the store exposes auditable state for trusted callers (dashboard aggregation). */
+    public readonly store: TransactionalFinancialStore,
     private readonly envelopeResolver: EnvelopeResolver,
     private readonly now: () => string = () => new Date().toISOString()
   ) {}
@@ -108,7 +109,7 @@ export class FinancialAuthorizationService {
                 ? {
                     ...c,
                     status: 'FAIL',
-                    code: 'DUPLICATE_EXISTING_AUTHORIZATION',
+                    code: 'G2_DUPLICATE',
                     explanation: 'Conflicto de concurrencia: la obligación ya fue autorizada por otra transacción.',
                   }
                 : c
@@ -185,6 +186,8 @@ export class FinancialAuthorizationService {
           unroundedUsd: unroundedUsd.toString(),
           budgetId: budget?.budgetId ?? 'UNKNOWN',
           budgetLimitRevision: budget?.revision ?? 1,
+          originatingWorkerGrantRef: command.agentGrantRef,
+          policyRevisionId: evalResult.policyRevisionId,
           status: 'PENDING',
           createdAt: occurredAt,
           expiresAt,
@@ -304,8 +307,12 @@ export class FinancialAuthorizationService {
         request.envelopeIds
       );
 
-      const workerGrant = Array.from(this.store.grants.values())[0];
-      const context = this.buildContextSnapshot(workerGrant?.grantId ?? 'default');
+      const grantRef = request.originatingWorkerGrantRef;
+      const workerGrant = this.store.grants.get(grantRef);
+      if (!workerGrant) {
+        throw new Error(`APPROVAL_STALE: Originating worker capability grant (${grantRef}) revoked or missing`);
+      }
+      const context = this.buildContextSnapshot(grantRef);
 
       // Re-evaluate
       const freshEval = evaluatePayable(envelopes, context, 'REQUEST_SIMULATED_AUTHORIZATION');
@@ -329,11 +336,20 @@ export class FinancialAuthorizationService {
         return record;
       }
 
-      // Staleness check on approval binding: budgetId must match
+      // Staleness checks on approval binding
       const period = deriveBudgetPeriod(envelopes[0]!.invoice).period;
       const budget = Array.from(this.store.budgets.values()).find(b => b.period === period);
       if (!budget || budget.budgetId !== request.budgetId) {
         throw new Error('APPROVAL_STALE: Budget identity or structure changed');
+      }
+      if (budget.revision < request.budgetLimitRevision) {
+        throw new Error('APPROVAL_STALE: Budget limit revision changed');
+      }
+      if (request.policyRevisionId && freshEval.policyRevisionId !== request.policyRevisionId) {
+        throw new Error('APPROVAL_STALE: Company policy revision changed since approval request was created');
+      }
+      if (freshEval.financialContextDigest !== request.intentDigestSha256) {
+        throw new Error('APPROVAL_STALE: Invoice intent or commercial terms changed since approval request was created');
       }
 
       // All gates pass: consume one-off threshold exception
@@ -413,14 +429,10 @@ export class FinancialAuthorizationService {
   }
 
   private buildContextSnapshot(grantId: string): TrustedFinancialContext {
-    const workerGrant = this.store.grants.get(grantId) ?? {
-      grantId,
-      grantRevisionId: 'default-grant-rev-1',
-      tenantId: this.store.tenantId,
-      workerId: 'worker-default',
-      perPayableLimitUsd: '2500.00',
-      allowedActions: ['PROPOSE_PAYABLE', 'REQUEST_SIMULATED_AUTHORIZATION'] as const,
-    };
+    const workerGrant = this.store.grants.get(grantId);
+    if (!workerGrant) {
+      throw new Error(`UNKNOWN_AGENT_GRANT: ${grantId}`);
+    }
 
     return {
       tenantId: this.store.tenantId,
