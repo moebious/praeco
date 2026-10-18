@@ -6,6 +6,7 @@ import type {
 } from './types.js';
 import type { HarnessStore } from '../store.js';
 import { ensureHarnessWorkerGrant } from '../l2-grants.js';
+import type { FinancialDecisionPort, FinancialIntentReference } from '../types.js';
 import {
   createScenarioStore,
   buildScenarios,
@@ -44,10 +45,11 @@ class ScenarioResolver implements EnvelopeResolver {
 
 export interface KaelToolsOptions {
   store: HarnessStore;
+  decisionPort?: FinancialDecisionPort;
 }
 
-export function createKaelTools(_options: KaelToolsOptions): SpecialistToolDefinition<any, any>[] {
-  const resolver = new ScenarioResolver();
+export function createKaelTools(options: KaelToolsOptions): SpecialistToolDefinition<any, any>[] {
+  const fallbackResolver = new ScenarioResolver();
 
   const explainPolicyEvaluationTool: SpecialistToolDefinition<
     { envelopeId: string; scenarioId?: string },
@@ -61,46 +63,68 @@ export function createKaelTools(_options: KaelToolsOptions): SpecialistToolDefin
       scenarioId: z.string().optional(),
     }),
     async execute(params, context) {
-      const scenarios = buildScenarios();
-      const targetScenario = params.scenarioId
-        ? scenarios.find((s) => s.id === params.scenarioId)
-        : scenarios.find((s) => s.envelope.envelopeId === params.envelopeId);
-      // Fail closed: never fall back to an unrelated synthetic invoice when the
-      // requested scenario or envelope does not exist.
-      if (!targetScenario) {
-        throw new Error(
-          `SCENARIO_NOT_FOUND: no synthetic scenario matches ${params.scenarioId ?? params.envelopeId}`
+      let evaluation;
+
+      if (options.decisionPort) {
+        const previewIntent: FinancialIntentReference = {
+          intentId: `preview-${Date.now()}`,
+          assignmentId: context.assignmentId,
+          caseId: context.assignmentId,
+          caseVersion: 1,
+          requestedByPrincipalId: context.principal.principalId,
+          workerPrincipalId: context.workerPrincipalId,
+          requestedBudgetId: 'BUDGET-2026-10',
+          envelopeIds: [params.envelopeId],
+          idempotencyKey: `preview-${Date.now()}`,
+          payloadDigest: 'preview-digest',
+        };
+        const previewResult = await options.decisionPort.preview(
+          previewIntent,
+          context,
+          params.scenarioId
+        );
+        evaluation = previewResult.evaluation;
+      } else {
+        const scenarios = buildScenarios();
+        const targetScenario = params.scenarioId
+          ? scenarios.find((s) => s.id === params.scenarioId)
+          : scenarios.find((s) => s.envelope.envelopeId === params.envelopeId);
+        // Fail closed: never fall back to an unrelated synthetic invoice when the
+        // requested scenario or envelope does not exist.
+        if (!targetScenario) {
+          throw new Error(
+            `SCENARIO_NOT_FOUND: no synthetic scenario matches ${params.scenarioId ?? params.envelopeId}`
+          );
+        }
+
+        const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
+        const store = createScenarioStore(scenarioId);
+        const service = new FinancialAuthorizationService(store, fallbackResolver);
+        // Read-only preview: the worker operates under its own grant with exactly
+        // the PROPOSE_PAYABLE action (least privilege, no authorization rights).
+        const agentGrantRef = ensureHarnessWorkerGrant(store, context.workerPrincipalId, [
+          'PROPOSE_PAYABLE',
+        ]);
+
+        const actor: TrustedActorContext = {
+          tenantId: store.tenantId,
+          principalId: context.principal.principalId,
+          roles: context.principal.roles,
+        };
+
+        evaluation = await service.preview(
+          {
+            proposal: {
+              payableCaseId: context.assignmentId,
+              envelopeIds: [targetScenario.envelope.envelopeId],
+            },
+            workerId: context.workerPrincipalId,
+            agentGrantRef,
+            idempotencyKey: `preview-${Date.now()}`,
+          },
+          actor
         );
       }
-
-      const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
-      const store = createScenarioStore(scenarioId);
-      const service = new FinancialAuthorizationService(store, resolver);
-      // Read-only preview: the worker operates under its own grant with exactly
-      // the PROPOSE_PAYABLE action (least privilege, no authorization rights).
-      const agentGrantRef = ensureHarnessWorkerGrant(store, context.workerPrincipalId, [
-        'PROPOSE_PAYABLE',
-      ]);
-
-      const actor: TrustedActorContext = {
-        tenantId: store.tenantId,
-        principalId: context.principal.principalId,
-        roles: context.principal.roles,
-      };
-
-      // Purely functional evaluation with L2 kernel in preview mode (read-only, zero ledger writes)
-      const evaluation = await service.preview(
-        {
-          proposal: {
-            payableCaseId: context.assignmentId,
-            envelopeIds: [targetScenario.envelope.envelopeId],
-          },
-          workerId: context.workerPrincipalId,
-          agentGrantRef,
-          idempotencyKey: `preview-${Date.now()}`,
-        },
-        actor
-      );
 
       const gateExplanations: KaelGateExplanation[] = evaluation.gateChecks.map((gr) => {
         let status: 'PASS' | 'FAIL' | 'ESCALATE' = 'PASS';

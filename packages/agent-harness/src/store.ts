@@ -13,6 +13,7 @@ import type {
   OutboxEvent,
   PayableCase,
   PayableCaseId,
+  CaseSourceLink,
   TenantId,
 } from './types.js';
 import { HarnessError } from './state-machine.js';
@@ -45,6 +46,7 @@ export interface HarnessStore {
   // Cases & Thread correlations
   getCase(tenantId: TenantId, caseId: PayableCaseId): Promise<PayableCase | null>;
   saveCase(c: PayableCase): Promise<void>;
+  attachSourceLink(tenantId: TenantId, caseId: PayableCaseId, link: CaseSourceLink): Promise<PayableCase>;
   findCaseByThread(
     tenantId: TenantId,
     provider: string,
@@ -196,6 +198,28 @@ export class InMemoryHarnessStore implements HarnessStore {
       ...c,
       sourceLinks: [...c.sourceLinks],
     });
+  }
+
+  async attachSourceLink(
+    tenantId: TenantId,
+    caseId: PayableCaseId,
+    link: CaseSourceLink
+  ): Promise<PayableCase> {
+    const existing = await this.getCase(tenantId, caseId);
+    const updated: PayableCase = existing
+      ? {
+          ...existing,
+          version: existing.version + 1,
+          sourceLinks: [...existing.sourceLinks, link],
+        }
+      : {
+          caseId,
+          tenantId,
+          version: 1,
+          sourceLinks: [link],
+        };
+    await this.saveCase(updated);
+    return updated;
   }
 
   async findCaseByThread(

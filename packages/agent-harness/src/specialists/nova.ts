@@ -8,6 +8,7 @@ import type { HarnessStore } from '../store.js';
 import { HarnessError } from '../state-machine.js';
 import { ensureHarnessWorkerGrant } from '../l2-grants.js';
 import { deriveL2IdempotencyKey, sha256Hex } from '../hashing.js';
+import type { FinancialDecisionPort } from '../types.js';
 import {
   FinancialAuthorizationService,
   createScenarioStore,
@@ -46,11 +47,12 @@ class ScenarioResolver implements EnvelopeResolver {
 
 export interface NovaToolsOptions {
   store: HarnessStore;
+  decisionPort?: FinancialDecisionPort;
   authService?: FinancialAuthorizationService;
 }
 
 export function createNovaTools(options: NovaToolsOptions): SpecialistToolDefinition<any, any>[] {
-  const resolver = new ScenarioResolver();
+  const fallbackResolver = new ScenarioResolver();
 
   const prepareFinancialIntentTool: SpecialistToolDefinition<
     {
@@ -73,9 +75,29 @@ export function createNovaTools(options: NovaToolsOptions): SpecialistToolDefini
     async execute(params, context) {
       const tenantId = context.principal.tenantId;
 
-      // 1. Verify case exists
+      if (!params.envelopeId || params.envelopeId.trim() === '') {
+        throw new HarnessError(
+          'NO_READY_INVOICE',
+          'Cannot prepare financial intent without a valid envelope ID'
+        );
+      }
+
+      // 1. Verify case exists and is not supplemental-only
       const currentCase = await options.store.getCase(tenantId, params.caseId);
       const caseVersion = currentCase?.version ?? 1;
+
+      if (currentCase && currentCase.sourceLinks.length > 0) {
+        const docLinks = currentCase.sourceLinks.filter((l) => l.kind === 'DOCUMENT');
+        const hasInvoice = docLinks.some(
+          (l) => l.kind === 'DOCUMENT' && l.evidence.sourceDisposition === 'INVOICE_OR_UNCERTAIN'
+        );
+        if (docLinks.length > 0 && !hasInvoice) {
+          throw new HarnessError(
+            'NO_READY_INVOICE',
+            'Cannot prepare financial intent for supplemental-only evidence'
+          );
+        }
+      }
 
       // 2. Derive stable idempotency key and payload digest
       const canonicalKey = `CANONICAL:${params.envelopeId.toUpperCase()}`;
@@ -154,72 +176,98 @@ export function createNovaTools(options: NovaToolsOptions): SpecialistToolDefini
         }
       }
 
-      // 3. Resolve scenario context or active L2 service
-      const scenarios = buildScenarios();
-      const targetScenario = params.scenarioId
-        ? scenarios.find((s) => s.id === params.scenarioId)
-        : scenarios.find((s) => s.envelope.envelopeId === intent.envelopeIds[0]);
-      // Fail closed: never fall back to an unrelated synthetic invoice when the
-      // referenced scenario or envelope does not exist.
-      if (!targetScenario) {
-        throw new Error(
-          `SCENARIO_NOT_FOUND: no synthetic scenario matches ${params.scenarioId ?? intent.envelopeIds[0]}`
+      let decisionRef;
+
+      // 3. Dispatch through FinancialDecisionPort if provided
+      if (options.decisionPort) {
+        // Also check if L2 decision store already has this command result
+        const observation = await options.decisionPort.getCommandResult(
+          intent,
+          context,
+          params.scenarioId
         );
+        if (observation.status === 'COMPLETED') {
+          decisionRef = observation.decision;
+        } else {
+          decisionRef = await options.decisionPort.decideAndCommit(
+            intent,
+            context,
+            params.scenarioId
+          );
+        }
+      } else {
+        // Fallback scenario resolution
+        const scenarios = buildScenarios();
+        const targetScenario = params.scenarioId
+          ? scenarios.find((s) => s.id === params.scenarioId)
+          : scenarios.find((s) => s.envelope.envelopeId === intent.envelopeIds[0]);
+        // Fail closed: never fall back to an unrelated synthetic invoice when the
+        // referenced scenario or envelope does not exist.
+        if (!targetScenario) {
+          throw new Error(
+            `SCENARIO_NOT_FOUND: no synthetic scenario matches ${params.scenarioId ?? intent.envelopeIds[0]}`
+          );
+        }
+
+        const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
+        const scenarioStore = createScenarioStore(scenarioId);
+        const service =
+          options.authService ??
+          new FinancialAuthorizationService(scenarioStore, fallbackResolver);
+        // Nova requests simulated authorization: the worker operates under its
+        // own grant carrying exactly the REQUEST_SIMULATED_AUTHORIZATION action.
+        const agentGrantRef = ensureHarnessWorkerGrant(service.store, context.workerPrincipalId, [
+          'REQUEST_SIMULATED_AUTHORIZATION',
+        ]);
+
+        const actor: TrustedActorContext = {
+          tenantId: scenarioStore.tenantId,
+          principalId: context.principal.principalId,
+          roles: context.principal.roles,
+        };
+
+        const record = await service.decideAndCommit(
+          {
+            proposal: {
+              payableCaseId: intent.caseId,
+              envelopeIds: [targetScenario.envelope.envelopeId],
+            },
+            workerId: context.workerPrincipalId,
+            agentGrantRef,
+            idempotencyKey: intent.idempotencyKey,
+          },
+          actor
+        );
+
+        decisionRef = {
+          decisionId: record.decisionId,
+          outcome: record.outcome,
+          approvalRequestId: record.approvalRequestId ?? undefined,
+          gateSummaryRefs: record.gateChecks.map((g) => `${g.gate}:${g.status}`),
+        };
       }
 
-      const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
-      const scenarioStore = createScenarioStore(scenarioId);
-      const service = options.authService ?? new FinancialAuthorizationService(scenarioStore, resolver);
-      // Nova requests simulated authorization: the worker operates under its
-      // own grant carrying exactly the REQUEST_SIMULATED_AUTHORIZATION action.
-      const agentGrantRef = ensureHarnessWorkerGrant(service.store, context.workerPrincipalId, [
-        'REQUEST_SIMULATED_AUTHORIZATION',
-      ]);
-
-      const actor: TrustedActorContext = {
-        tenantId: scenarioStore.tenantId,
-        principalId: context.principal.principalId,
-        roles: context.principal.roles,
-      };
-
-      const record = await service.decideAndCommit(
-        {
-          proposal: {
-            payableCaseId: intent.caseId,
-            envelopeIds: [targetScenario.envelope.envelopeId],
-          },
-          workerId: context.workerPrincipalId,
-          agentGrantRef,
-          idempotencyKey: intent.idempotencyKey,
-        },
-        actor
-      );
-
-      const decisionRef = {
-        decisionId: record.decisionId,
-        outcome: record.outcome,
-        approvalRequestId: record.approvalRequestId ?? undefined,
-        gateSummaryRefs: record.gateChecks.map((g) => `${g.gate}:${g.status}`),
-      };
-
+      // 4. Record decision reference in store
       await options.store.saveFinancialDecision(tenantId, decisionRef);
+
+      // 5. Persist command receipt to guarantee idempotency on retries
       await options.store.saveCommandReceipt({
-        commandReceiptId: `cmd-${randomUUID()}`,
+        commandReceiptId: `cr-${randomUUID()}`,
         tenantId,
         scope: 'FINANCIAL_INTENT',
         commandKey: intent.idempotencyKey,
         payloadDigest: intent.payloadDigest,
-        resultRef: record.decisionId,
+        resultRef: decisionRef.decisionId,
         createdAt: new Date().toISOString(),
       });
 
       return {
         intentId: intent.intentId,
         idempotencyKey: intent.idempotencyKey,
-        decisionId: record.decisionId,
-        outcome: record.outcome,
-        approvalRequestId: record.approvalRequestId ?? undefined,
-        explanation: record.explanation,
+        decisionId: decisionRef.decisionId,
+        outcome: decisionRef.outcome,
+        approvalRequestId: decisionRef.approvalRequestId,
+        explanation: `Decisión L2 procesada: ${decisionRef.outcome}`,
       };
     },
   };

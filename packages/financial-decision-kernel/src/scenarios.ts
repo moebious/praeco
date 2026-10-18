@@ -134,6 +134,34 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         maxPositiveVariancePct: '5.00',
         effectiveFrom: '2026-01-01',
       });
+
+      // Exact synthetic demo-day vendor and contract from 02.pdf
+      const synCloudAccount: PaymentAccountClaim = {
+        rail: 'BANK',
+        accountIdentifier: 'SYN-CLOUD-ACCOUNT-A',
+      };
+      const synCloudFingerprint = computeAccountFingerprint(
+        DEMO_TENANT_ID,
+        synCloudAccount,
+        DEFAULT_SYNTHETIC_HMAC_KEY
+      );
+      store.vendors.set('VENDOR-SYN-CLOUD', {
+        vendorId: 'VENDOR-SYN-CLOUD',
+        legalName: 'Synthetic Cloud Infrastructure',
+        taxId: 'SYN-TAX-CLOUD',
+        isAllowlisted: true,
+        paymentAccountFingerprint: synCloudFingerprint,
+      });
+      store.contracts.set('SYN-CONTRACT-2', {
+        contractId: 'SYN-CONTRACT-2',
+        vendorId: 'VENDOR-SYN-CLOUD',
+        mode: 'RECURRING_TOLERANCE',
+        amount: '470.00',
+        currency: 'USD',
+        maxPositiveVariancePct: '5.00',
+        effectiveFrom: '2026-01-01',
+      });
+
       store.budgets.set('BUDGET-2026-10', {
         budgetId: 'BUDGET-2026-10',
         tenantId: DEMO_TENANT_ID,
@@ -163,6 +191,33 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         currency: 'MXN',
         effectiveFrom: '2026-01-01',
       });
+
+      // Exact synthetic demo-day vendor and contract from 03.pdf
+      const synMexAccount: PaymentAccountClaim = {
+        rail: 'BANK',
+        accountIdentifier: 'SYN-MEX-ACCOUNT-A',
+      };
+      const synMexFingerprint = computeAccountFingerprint(
+        DEMO_TENANT_ID,
+        synMexAccount,
+        DEFAULT_SYNTHETIC_HMAC_KEY
+      );
+      store.vendors.set('VENDOR-SYN-MEX', {
+        vendorId: 'VENDOR-SYN-MEX',
+        legalName: 'Synthetic Mexico Design Agency',
+        taxId: 'SYN-TAX-MEX',
+        isAllowlisted: true,
+        paymentAccountFingerprint: synMexFingerprint,
+      });
+      store.contracts.set('SYN-CONTRACT-3', {
+        contractId: 'SYN-CONTRACT-3',
+        vendorId: 'VENDOR-SYN-MEX',
+        mode: 'CEILING',
+        amount: '80000.00',
+        currency: 'MXN',
+        effectiveFrom: '2026-01-01',
+      });
+
       store.budgets.set('BUDGET-2026-10', {
         budgetId: 'BUDGET-2026-10',
         tenantId: DEMO_TENANT_ID,
@@ -192,6 +247,33 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         currency: 'USD',
         effectiveFrom: '2026-01-01',
       });
+
+      // Exact synthetic demo-day vendor and contract from 04.pdf
+      const synArgAccount: PaymentAccountClaim = {
+        rail: 'BANK',
+        accountIdentifier: 'SYN-ARG-ACCOUNT-A',
+      };
+      const synArgFingerprint = computeAccountFingerprint(
+        DEMO_TENANT_ID,
+        synArgAccount,
+        DEFAULT_SYNTHETIC_HMAC_KEY
+      );
+      store.vendors.set('VENDOR-SYN-ARG', {
+        vendorId: 'VENDOR-SYN-ARG',
+        legalName: 'Synthetic Argentina Contractor',
+        taxId: 'SYN-TAX-ARG',
+        isAllowlisted: true,
+        paymentAccountFingerprint: synArgFingerprint,
+      });
+      store.contracts.set('SYN-CONTRACT-4', {
+        contractId: 'SYN-CONTRACT-4',
+        vendorId: 'VENDOR-SYN-ARG',
+        mode: 'EXACT',
+        amount: '1500.00',
+        currency: 'USD',
+        effectiveFrom: '2026-01-01',
+      });
+
       store.budgets.set('BUDGET-2026-10', {
         budgetId: 'BUDGET-2026-10',
         tenantId: DEMO_TENANT_ID,
@@ -257,6 +339,58 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         committedUsd: '2200.00',
         authorizedAt: '2026-10-15T10:00:00Z',
       });
+
+      // Also preseed matching obligation for exact demo-day 05.txt
+      const synBogAccount: PaymentAccountClaim = {
+        rail: 'BANK',
+        accountIdentifier: 'SYN-BOG-ACCOUNT-A',
+      };
+      const synBogFingerprint = computeAccountFingerprint(
+        DEMO_TENANT_ID,
+        synBogAccount,
+        DEFAULT_SYNTHETIC_HMAC_KEY
+      );
+      store.vendors.set('VENDOR-SYN-BOG', {
+        vendorId: 'VENDOR-SYN-BOG',
+        legalName: 'Synthetic Bogota Developer',
+        taxId: 'SYN-TAX-BOG',
+        isAllowlisted: true,
+        paymentAccountFingerprint: synBogFingerprint,
+      });
+      store.contracts.set('SYN-CONTRACT-1', {
+        contractId: 'SYN-CONTRACT-1',
+        vendorId: 'VENDOR-SYN-BOG',
+        mode: 'EXACT',
+        amount: '2200.00',
+        currency: 'USD',
+        effectiveFrom: '2026-01-01',
+      });
+      const canonicalKeySyn = buildCanonicalPayableKey(
+        DEMO_TENANT_ID,
+        'SYN-TAX-BOG',
+        'BOG-2026-10'
+      );
+      const matchingDigestSyn = computeIntentDigest({
+        tenantId: DEMO_TENANT_ID,
+        canonicalPayableKey: canonicalKeySyn,
+        amount: '2200.00',
+        currency: 'USD',
+        usdEquivalent: '2200',
+        accountFingerprint: synBogFingerprint,
+        contractRef: 'SYN-CONTRACT-1',
+        budgetPeriod: '2026-10',
+        policyRevisionId: 'pol-blinka-demo-v1',
+        grantRevisionId: 'grant-rev-1',
+      });
+      store.obligations.set(canonicalKeySyn, {
+        obligationId: 'ob-preseeded-bogota-syn',
+        tenantId: DEMO_TENANT_ID,
+        canonicalKey: canonicalKeySyn,
+        intentDigestSha256: matchingDigestSyn,
+        status: 'COMMITTED',
+        committedUsd: '2200.00',
+        authorizedAt: '2026-10-15T10:00:00Z',
+      });
       break;
     }
 
@@ -291,6 +425,33 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         currency: 'USD',
         effectiveFrom: '2026-01-01',
       });
+
+      // Exact synthetic demo-day vendor and contract from 07.pdf
+      const synBudgetAccount: PaymentAccountClaim = {
+        rail: 'BANK',
+        accountIdentifier: 'SYN-BUDGET-ACCOUNT-A',
+      };
+      const synBudgetFingerprint = computeAccountFingerprint(
+        DEMO_TENANT_ID,
+        synBudgetAccount,
+        DEFAULT_SYNTHETIC_HMAC_KEY
+      );
+      store.vendors.set('VENDOR-SYN-BUDGET', {
+        vendorId: 'VENDOR-SYN-BUDGET',
+        legalName: 'Synthetic Services Contractor',
+        taxId: 'SYN-TAX-BUDGET',
+        isAllowlisted: true,
+        paymentAccountFingerprint: synBudgetFingerprint,
+      });
+      store.contracts.set('SYN-CONTRACT-7', {
+        contractId: 'SYN-CONTRACT-7',
+        vendorId: 'VENDOR-SYN-BUDGET',
+        mode: 'EXACT',
+        amount: '2100.00',
+        currency: 'USD',
+        effectiveFrom: '2026-01-01',
+      });
+
       store.budgets.set('BUDGET-2026-10', {
         budgetId: 'BUDGET-2026-10',
         tenantId: DEMO_TENANT_ID,
@@ -320,6 +481,34 @@ export function createScenarioStore(scenarioId: ScenarioId): TransactionalFinanc
         currency: 'USD',
         effectiveFrom: '2026-01-01',
       });
+
+      // Exact synthetic demo-day vendor from 08.pdf with directory account SYN-ACCOUNT-DIR-A
+      // (The invoice from 08.pdf has altered account SYN-ACCOUNT-REPLACEMENT-B, so it fails account match)
+      const synAccountDir: PaymentAccountClaim = {
+        rail: 'BANK',
+        accountIdentifier: 'SYN-ACCOUNT-DIR-A',
+      };
+      const synAccountDirFingerprint = computeAccountFingerprint(
+        DEMO_TENANT_ID,
+        synAccountDir,
+        DEFAULT_SYNTHETIC_HMAC_KEY
+      );
+      store.vendors.set('VENDOR-SYN-ACCOUNT', {
+        vendorId: 'VENDOR-SYN-ACCOUNT',
+        legalName: 'Synthetic Regional Supplier',
+        taxId: 'SYN-TAX-ACCOUNT',
+        isAllowlisted: true,
+        paymentAccountFingerprint: synAccountDirFingerprint,
+      });
+      store.contracts.set('SYN-CONTRACT-8', {
+        contractId: 'SYN-CONTRACT-8',
+        vendorId: 'VENDOR-SYN-ACCOUNT',
+        mode: 'EXACT',
+        amount: '1200.00',
+        currency: 'USD',
+        effectiveFrom: '2026-01-01',
+      });
+
       store.budgets.set('BUDGET-2026-10', {
         budgetId: 'BUDGET-2026-10',
         tenantId: DEMO_TENANT_ID,

@@ -1,7 +1,10 @@
 import type {
   Assignment,
   AssignmentId,
+  EvidencePort,
+  FinancialDecisionPort,
   FinancialOutcome,
+  TrustedExecutionContext,
   TrustedPrincipal,
 } from './types.js';
 import type { HarnessStore } from './store.js';
@@ -22,6 +25,8 @@ export interface WorkflowRunnerOptions {
   store: HarnessStore;
   service: AssignmentService;
   specialistLimits?: Partial<SpecialistLimits>;
+  evidencePort?: EvidencePort;
+  decisionPort?: FinancialDecisionPort;
 }
 
 export interface WorkflowExecutionParams {
@@ -34,12 +39,13 @@ export interface WorkflowExecutionParams {
 
 export interface WorkflowExecutionResult {
   assignment: Assignment;
-  outcome: FinancialOutcome;
-  decisionId: string;
+  outcome?: FinancialOutcome;
+  decisionId?: string;
   approvalRequestId?: string;
   evidenceView: VeraEvidenceView;
-  policyExplanation: KaelPolicyExplanationView;
-  proposalResult: NovaProposalDispatchResult;
+  policyExplanation?: KaelPolicyExplanationView;
+  proposalResult?: NovaProposalDispatchResult;
+  isSupplementalOnly?: boolean;
 }
 
 export class WorkflowRunner {
@@ -53,14 +59,23 @@ export class WorkflowRunner {
     this.service = options.service;
     this.registry = new SpecialistToolRegistry();
 
-    // Register all specialist tools
-    for (const tool of createVeraTools({ store: this.store })) {
+    // Register all specialist tools, wiring evidencePort and decisionPort if provided
+    for (const tool of createVeraTools({
+      store: this.store,
+      evidencePort: options.evidencePort,
+    })) {
       this.registry.registerTool(tool);
     }
-    for (const tool of createKaelTools({ store: this.store })) {
+    for (const tool of createKaelTools({
+      store: this.store,
+      decisionPort: options.decisionPort,
+    })) {
       this.registry.registerTool(tool);
     }
-    for (const tool of createNovaTools({ store: this.store })) {
+    for (const tool of createNovaTools({
+      store: this.store,
+      decisionPort: options.decisionPort,
+    })) {
       this.registry.registerTool(tool);
     }
 
@@ -72,12 +87,15 @@ export class WorkflowRunner {
    * Progression:
    * 1. Claims active run & monotonic epoch.
    * 2. Step 1 (Vera): inspects documentary evidence -> Checkpoint EVIDENCE_RESOLVED.
+   *    - If supplemental-only: completes without minting financial intent or dispatching L2.
    * 3. Step 2 (Kael): runs read-only policy preview -> explains gates.
    * 4. Step 3 (Nova): freezes financial intent -> Checkpoint L2_INTENT_RECORDED.
    * 5. Step 4 (Nova): submits proposal to L2 -> Checkpoint L2_DECISION_RECORDED.
    * 6. Resolves outcome:
    *    - AUTHORIZED_SIMULATED / BLOCKED -> COMPLETED -> Checkpoint FINISHED.
    *    - PENDING_HUMAN_APPROVAL -> WAITING_FOR_REVIEW -> Checkpoint AWAITING_REVIEW.
+   *
+   * Safety invariant: Never mark simulated authorization as PAID.
    */
   async executeAssignmentWorkflow(
     params: WorkflowExecutionParams,
@@ -97,6 +115,10 @@ export class WorkflowRunner {
     let assignment = await this.service.get(params.assignmentId, principal);
 
     // 2. Step 1: Vera Documentary Inspection
+    const veraContext: TrustedExecutionContext = {
+      ...context,
+      workerPrincipalId: `${context.workerPrincipalId}-vera`,
+    };
     const veraRes = await this.runner.runSpecialistLoop(
       'VERA',
       [
@@ -105,7 +127,7 @@ export class WorkflowRunner {
           params: { sourceReference: params.sourceReference },
         },
       ],
-      context
+      veraContext
     );
     const evidenceView = veraRes.finalOutput as unknown as VeraEvidenceView;
 
@@ -120,8 +142,36 @@ export class WorkflowRunner {
       context
     );
 
+    // If documentary intake is supplemental context only (e.g. email context, notes),
+    // it records context and NEVER creates a financial intent or submits to L2 (Contract Sec 5 / ADR-007).
+    if (
+      evidenceView.sourceDisposition === 'SUPPLEMENTAL_CONTEXT' ||
+      evidenceView.envelopes.length === 0
+    ) {
+      assignment = await this.service.advance(
+        {
+          assignmentId: params.assignmentId,
+          expectedVersion: assignment.version,
+          next: 'COMPLETED',
+          outputRefs: [evidenceView.sourceId],
+          checkpointStage: 'FINISHED',
+        },
+        context
+      );
+
+      return {
+        assignment,
+        evidenceView,
+        isSupplementalOnly: true,
+      };
+    }
+
     // 3. Step 2: Kael Policy Explanation (Read-Only Preview)
-    const envelopeId = evidenceView.envelopes[0]?.envelopeId ?? params.sourceReference;
+    const envelopeId = evidenceView.envelopes[0]!.envelopeId;
+    const kaelContext: TrustedExecutionContext = {
+      ...context,
+      workerPrincipalId: `${context.workerPrincipalId}-kael`,
+    };
     const kaelRes = await this.runner.runSpecialistLoop(
       'KAEL',
       [
@@ -133,11 +183,15 @@ export class WorkflowRunner {
           },
         },
       ],
-      context
+      kaelContext
     );
     const policyExplanation = kaelRes.finalOutput as unknown as KaelPolicyExplanationView;
 
     // 4. Step 3: Nova Intent Preparation
+    const novaContext: TrustedExecutionContext = {
+      ...context,
+      workerPrincipalId: `${context.workerPrincipalId}-nova`,
+    };
     const novaIntentRes = await this.runner.runSpecialistLoop(
       'NOVA',
       [
@@ -151,7 +205,7 @@ export class WorkflowRunner {
           },
         },
       ],
-      context
+      novaContext
     );
     const intentOutput = novaIntentRes.finalOutput as {
       intentId: string;
@@ -181,7 +235,7 @@ export class WorkflowRunner {
           },
         },
       ],
-      context
+      novaContext
     );
     const proposalResult = novaSubmitRes.finalOutput as unknown as NovaProposalDispatchResult;
 
