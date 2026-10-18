@@ -56,7 +56,8 @@ export class BoundedSpecialistRunner {
 
       // 2. Check deadline bound
       const elapsed = Date.now() - startTime;
-      if (elapsed >= this.limits.timeoutMs) {
+      const remainingMs = this.limits.timeoutMs - elapsed;
+      if (remainingMs <= 0) {
         throw new HarnessError(
           'EXECUTION_DEADLINE_EXCEEDED',
           `Specialist ${role} exceeded wall-clock timeout deadline of ${this.limits.timeoutMs}ms (elapsed: ${elapsed}ms)`
@@ -65,14 +66,42 @@ export class BoundedSpecialistRunner {
 
       const step = steps[i]!;
       const stepStart = Date.now();
+      const abortController = new AbortController();
+      let timeoutHandle: NodeJS.Timeout | undefined;
+
+      const stepContext: TrustedExecutionContext = {
+        ...context,
+        signal: abortController.signal,
+      };
 
       // 3. Execute tool through registry with strict role-based access control
-      const output = await this.registry.executeTool(
+      const stepPromise = this.registry.executeTool(
         step.toolName,
         role,
         step.params,
-        context
+        stepContext
       );
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          abortController.abort();
+          reject(
+            new HarnessError(
+              'EXECUTION_DEADLINE_EXCEEDED',
+              `Specialist ${role} exceeded wall-clock timeout deadline of ${this.limits.timeoutMs}ms during tool ${step.toolName}`
+            )
+          );
+        }, remainingMs);
+      });
+
+      let output: unknown;
+      try {
+        output = await Promise.race([stepPromise, timeoutPromise]);
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
 
       const durationMs = Date.now() - stepStart;
       const stepRecord: SpecialistStepRecord = {

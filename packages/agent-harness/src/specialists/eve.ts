@@ -4,6 +4,7 @@ import type {
   EvidencePort,
   InboundMessageCommand,
   SpecialistRole,
+  TenantId,
   TrustedPrincipal,
 } from '../types.js';
 import type { HarnessStore } from '../store.js';
@@ -18,6 +19,7 @@ import type { SpecialistToolDefinition } from './types.js';
 
 export interface InboundChannelMessage {
   readonly id: string;
+  readonly tenantId: TenantId;
   readonly connectionId: string;
   readonly provider: 'AGENTMAIL' | 'EMAIL' | 'WEB' | 'TELEGRAM' | string;
   readonly from: string;
@@ -31,28 +33,51 @@ export interface InboundChannelMessage {
 }
 
 export interface ChannelInboxPort {
-  listMessages(filter?: {
-    connectionId?: string;
-    status?: 'PENDING' | 'PROCESSED' | 'ALL';
-    limit?: number;
-  }): Promise<readonly InboundChannelMessage[]>;
-  getMessage(messageId: string): Promise<InboundChannelMessage | undefined>;
-  markProcessed(messageId: string): Promise<void>;
+  listMessages(
+    tenantId: TenantId,
+    filter?: {
+      connectionId?: string;
+      status?: 'PENDING' | 'PROCESSED' | 'ALL';
+      limit?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<readonly InboundChannelMessage[]>;
+  getMessage(
+    tenantId: TenantId,
+    messageId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<InboundChannelMessage | undefined>;
+  markProcessed(
+    tenantId: TenantId,
+    messageId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<void>;
 }
 
 export class InMemoryChannelInbox implements ChannelInboxPort {
   private readonly messages = new Map<string, InboundChannelMessage>();
 
-  addMessage(message: InboundChannelMessage): void {
-    this.messages.set(message.id, { ...message });
+  private makeKey(tenantId: TenantId, messageId: string): string {
+    return `${tenantId}:${messageId}`;
   }
 
-  async listMessages(filter?: {
-    connectionId?: string;
-    status?: 'PENDING' | 'PROCESSED' | 'ALL';
-    limit?: number;
-  }): Promise<readonly InboundChannelMessage[]> {
-    let result = Array.from(this.messages.values());
+  addMessage(message: InboundChannelMessage): void {
+    this.messages.set(this.makeKey(message.tenantId, message.id), { ...message });
+  }
+
+  async listMessages(
+    tenantId: TenantId,
+    filter?: {
+      connectionId?: string;
+      status?: 'PENDING' | 'PROCESSED' | 'ALL';
+      limit?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<readonly InboundChannelMessage[]> {
+    if (filter?.signal?.aborted) {
+      throw new HarnessError('EXECUTION_ABORTED', 'listMessages was aborted by cancellation signal');
+    }
+    let result = Array.from(this.messages.values()).filter((m) => m.tenantId === tenantId);
     if (filter?.connectionId) {
       result = result.filter((m) => m.connectionId === filter.connectionId);
     }
@@ -65,12 +90,26 @@ export class InMemoryChannelInbox implements ChannelInboxPort {
     return result;
   }
 
-  async getMessage(messageId: string): Promise<InboundChannelMessage | undefined> {
-    return this.messages.get(messageId);
+  async getMessage(
+    tenantId: TenantId,
+    messageId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<InboundChannelMessage | undefined> {
+    if (options?.signal?.aborted) {
+      throw new HarnessError('EXECUTION_ABORTED', 'getMessage was aborted by cancellation signal');
+    }
+    return this.messages.get(this.makeKey(tenantId, messageId));
   }
 
-  async markProcessed(messageId: string): Promise<void> {
-    const msg = this.messages.get(messageId);
+  async markProcessed(
+    tenantId: TenantId,
+    messageId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<void> {
+    if (options?.signal?.aborted) {
+      throw new HarnessError('EXECUTION_ABORTED', 'markProcessed was aborted by cancellation signal');
+    }
+    const msg = this.messages.get(this.makeKey(tenantId, messageId));
     if (msg) {
       msg.status = 'PROCESSED';
     }
@@ -138,6 +177,15 @@ export interface EveCaseCorrelationView {
 export function createEveTools(options: EveToolsOptions): SpecialistToolDefinition<any, any>[] {
   const allowedRoles: readonly SpecialistRole[] = ['EVE'];
 
+  function assertNotCancelled(signal?: AbortSignal, stepName?: string): void {
+    if (signal?.aborted) {
+      throw new HarnessError(
+        'EXECUTION_ABORTED',
+        `Eve operation ${stepName ?? 'step'} was aborted by cancellation signal`
+      );
+    }
+  }
+
   // Tool 1: Fetch channel inbox
   const fetchInboxTool: SpecialistToolDefinition<
     { connectionId?: string; limit?: number; status?: 'PENDING' | 'PROCESSED' | 'ALL' },
@@ -151,8 +199,13 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       limit: z.number().int().min(1).max(50).optional().default(10),
       status: z.enum(['PENDING', 'PROCESSED', 'ALL']).optional().default('PENDING'),
     }),
-    async execute(params) {
-      const messages = await options.inbox.listMessages(params);
+    async execute(params, context) {
+      assertNotCancelled(context.signal, 'eve_fetch_channel_inbox:start');
+      const messages = await options.inbox.listMessages(context.principal.tenantId, {
+        ...params,
+        signal: context.signal,
+      });
+      assertNotCancelled(context.signal, 'eve_fetch_channel_inbox:end');
       return {
         messages: messages.map((m) => ({
           messageId: m.id,
@@ -178,8 +231,10 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       messageId: z.string().min(1, 'messageId is required'),
     }),
     async execute(params, context) {
+      assertNotCancelled(context.signal, 'eve_inspect_inbound_message:start');
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(params.messageId);
+      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      assertNotCancelled(context.signal, 'eve_inspect_inbound_message:after_get_message');
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -191,6 +246,7 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
         msg.connectionId,
         msg.from
       );
+      assertNotCancelled(context.signal, 'eve_inspect_inbound_message:after_agentmail_binding');
       if (!binding) {
         binding = await options.store.getPrincipalBinding(
           tenantId,
@@ -198,6 +254,7 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
           msg.connectionId,
           msg.from
         );
+        assertNotCancelled(context.signal, 'eve_inspect_inbound_message:after_email_binding');
       }
 
       const isRevoked = Boolean(binding?.revoked);
@@ -241,8 +298,11 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       messageId: z.string().min(1, 'messageId is required'),
       filename: z.string().min(1, 'filename is required'),
     }),
-    async execute(params) {
-      const msg = await options.inbox.getMessage(params.messageId);
+    async execute(params, context) {
+      assertNotCancelled(context.signal, 'eve_extract_and_validate_attachment:start');
+      const tenantId = context.principal.tenantId;
+      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      assertNotCancelled(context.signal, 'eve_extract_and_validate_attachment:after_get_message');
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -295,11 +355,14 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       filename: z.string().min(1, 'filename is required'),
     }),
     async execute(params, context) {
+      assertNotCancelled(context.signal, 'eve_ingest_document_to_l1:start');
       if (!options.evidencePort) {
         throw new HarnessError('EVIDENCE_PORT_UNAVAILABLE', 'L1 EvidencePort is not configured on Eve specialist');
       }
 
-      const msg = await options.inbox.getMessage(params.messageId);
+      const tenantId = context.principal.tenantId;
+      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      assertNotCancelled(context.signal, 'eve_ingest_document_to_l1:after_get_message');
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -315,6 +378,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       // Enforce file signature before L1 ingestion
       validateAttachmentSignature(att.mimeType, att.filename, att.content);
 
+      assertNotCancelled(context.signal, 'eve_ingest_document_to_l1:before_l1_ingest');
+
       const channel = att.mimeType === 'application/pdf' ? 'PDF' : 'EMAIL';
       const ref = await options.evidencePort.ingestSource(
         {
@@ -326,6 +391,8 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
         },
         context
       );
+
+      assertNotCancelled(context.signal, 'eve_ingest_document_to_l1:after_l1_ingest');
 
       return {
         sourceId: ref.sourceId,
@@ -351,8 +418,10 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
       preferredCaseId: z.string().optional(),
     }),
     async execute(params, context) {
+      assertNotCancelled(context.signal, 'eve_correlate_payable_case:start');
       const tenantId = context.principal.tenantId;
-      const msg = await options.inbox.getMessage(params.messageId);
+      const msg = await options.inbox.getMessage(tenantId, params.messageId, { signal: context.signal });
+      assertNotCancelled(context.signal, 'eve_correlate_payable_case:after_get_message');
       if (!msg) {
         throw new HarnessError('MESSAGE_NOT_FOUND', `Channel message ${params.messageId} not found in inbox`);
       }
@@ -364,6 +433,7 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
         msg.connectionId,
         msg.from
       );
+      assertNotCancelled(context.signal, 'eve_correlate_payable_case:after_agentmail_binding');
       if (!binding) {
         binding = await options.store.getPrincipalBinding(
           tenantId,
@@ -371,6 +441,7 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
           msg.connectionId,
           msg.from
         );
+        assertNotCancelled(context.signal, 'eve_correlate_payable_case:after_email_binding');
       }
 
       if (binding?.revoked) {
@@ -416,13 +487,22 @@ export function createEveTools(options: EveToolsOptions): SpecialistToolDefiniti
         payloadDigest,
       };
 
+      // FENCE BEFORE MUTATION 1: Prevent assignment creation if already cancelled
+      assertNotCancelled(context.signal, 'eve_correlate_payable_case:before_create_or_load');
+
       const { assignment, isDuplicate } = await options.service.createOrLoad(
         command,
-        principal
+        principal,
+        { signal: context.signal }
       );
 
+      // FENCE BEFORE MUTATION 2: Prevent inbox status update if cancelled
+      assertNotCancelled(context.signal, 'eve_correlate_payable_case:before_mark_processed');
+
       // Mark message processed in inbox
-      await options.inbox.markProcessed(msg.id);
+      await options.inbox.markProcessed(tenantId, msg.id, { signal: context.signal });
+
+      assertNotCancelled(context.signal, 'eve_correlate_payable_case:after_mark_processed');
 
       return {
         caseId: assignment.caseId,

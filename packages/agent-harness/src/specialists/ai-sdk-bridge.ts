@@ -19,7 +19,8 @@ import { DEFAULT_SPECIALIST_LIMITS } from './types.js';
 export interface AiSdkTool<TParams = any, TResult = any> {
   readonly description: string;
   readonly parameters: z.ZodType<TParams>;
-  execute(params: TParams): Promise<TResult>;
+  readonly inputSchema?: z.ZodType<TParams>;
+  execute(params: TParams, options?: { signal?: AbortSignal }): Promise<TResult>;
 }
 
 export type AiSdkToolMap = Record<string, AiSdkTool>;
@@ -39,7 +40,11 @@ export function toAiSdkTools(
     result[tool.name] = {
       description: tool.description,
       parameters: tool.schema,
-      execute: async (params: unknown) => {
+      inputSchema: tool.schema,
+      execute: async (params: unknown, options?: { signal?: AbortSignal }) => {
+        if (options?.signal?.aborted) {
+          throw new HarnessError('EXECUTION_ABORTED', `Execution of tool ${tool.name} was aborted`);
+        }
         const parsed = tool.schema.safeParse(params);
         if (!parsed.success) {
           throw new HarnessError(
@@ -47,7 +52,11 @@ export function toAiSdkTools(
             `Invalid parameters for tool ${tool.name}: ${parsed.error.message}`
           );
         }
-        return tool.execute(parsed.data, context);
+        const stepContext: TrustedExecutionContext = {
+          ...context,
+          signal: options?.signal ?? context.signal,
+        };
+        return tool.execute(parsed.data, stepContext);
       },
     };
   }
@@ -70,7 +79,8 @@ export interface AiSdkSpecialistRunnerOptions {
  * Runs bounded specialist tool loops using the Vercel AI SDK tool protocol:
  * 1. Offline deterministic execution via scripted / tool-calling sequence (ADR-007 delta #1).
  * 2. Strict bounds enforcement: maxSteps and timeoutMs to prevent infinite loops.
- * 3. Audit trail: records step records with inputs, outputs, and elapsed durations.
+ * 3. In-flight abort signal cancellation and step-level race timeout.
+ * 4. Audit trail: records step records with inputs, outputs, and elapsed durations.
  */
 export class AiSdkSpecialistRunner {
   private readonly limits: SpecialistLimits;
@@ -108,7 +118,8 @@ export class AiSdkSpecialistRunner {
 
       // 2. Deadline bound
       const elapsed = Date.now() - startTime;
-      if (elapsed >= this.limits.timeoutMs) {
+      const remainingMs = this.limits.timeoutMs - elapsed;
+      if (remainingMs <= 0) {
         throw new HarnessError(
           'EXECUTION_DEADLINE_EXCEEDED',
           `Specialist ${role} exceeded wall-clock timeout deadline of ${this.limits.timeoutMs}ms (elapsed: ${elapsed}ms)`
@@ -122,7 +133,32 @@ export class AiSdkSpecialistRunner {
       }
 
       const stepStart = Date.now();
-      const output = await tool.execute(step.params);
+      const abortController = new AbortController();
+      let timeoutHandle: NodeJS.Timeout | undefined;
+
+      const stepPromise = tool.execute(step.params, { signal: abortController.signal });
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          abortController.abort();
+          reject(
+            new HarnessError(
+              'EXECUTION_DEADLINE_EXCEEDED',
+              `Specialist ${role} exceeded wall-clock timeout deadline of ${this.limits.timeoutMs}ms during tool ${step.toolName}`
+            )
+          );
+        }, remainingMs);
+      });
+
+      let output: unknown;
+      try {
+        output = await Promise.race([stepPromise, timeoutPromise]);
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
+
       const durationMs = Date.now() - stepStart;
 
       const record: SpecialistStepRecord = {

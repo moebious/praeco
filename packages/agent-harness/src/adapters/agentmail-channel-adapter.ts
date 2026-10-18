@@ -40,6 +40,13 @@ export interface AgentMailAdapterOptions {
   readonly webhookSecret?: string;
   readonly clockSkewToleranceMs?: number; // default 300_000ms (5 mins)
   readonly now?: () => number;
+  readonly trustedTenantId?: TenantId;
+  readonly trustedInstallationId?: string;
+  readonly resolveTenant?: (
+    installationId: string,
+    from: string,
+    to: string
+  ) => Promise<TenantId> | TenantId;
 }
 
 export interface AgentMailIngestResult {
@@ -117,6 +124,62 @@ export function validateAttachmentSignature(mimeType: string, filename: string, 
 }
 
 /**
+ * Computes an unambiguous deterministic canonical digest of an AgentMail webhook's entire content.
+ * Binds every behavior-affecting field (tenantId, installationId, messageId, threadId, from, to, subject,
+ * text hash, html hash, and deterministic sorted attachment hashes) using an unambiguous canonical encoding.
+ */
+export function computeAgentMailContentDigest(payload: AgentMailWebhookPayload): string {
+  const attachments = (payload.attachments ?? []).map((att) => ({
+    filename: att.filename,
+    mimeType: att.mimeType,
+    sizeBytes: att.content.length,
+    sha256: createHash('sha256').update(att.content).digest('hex'),
+  })).sort((a, b) => a.filename.localeCompare(b.filename) || a.sha256.localeCompare(b.sha256));
+
+  const textDigest = payload.text !== undefined
+    ? createHash('sha256').update(payload.text).digest('hex')
+    : null;
+
+  const htmlDigest = payload.html !== undefined
+    ? createHash('sha256').update(payload.html).digest('hex')
+    : null;
+
+  const canonical = {
+    v: 1,
+    tenantId: payload.tenantId,
+    installationId: payload.installationId,
+    messageId: payload.messageId,
+    threadId: payload.threadId ?? null,
+    from: payload.from,
+    to: payload.to,
+    subject: payload.subject,
+    textDigest,
+    htmlDigest,
+    attachments,
+  };
+
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/**
+ * Computes the expected HMAC-SHA256 signature for an AgentMail webhook payload.
+ * When rawBody is provided, signs timestamp + '.' + rawBody.
+ * Otherwise, signs timestamp + '.' + canonical content digest.
+ */
+export function computeAgentMailSignature(
+  payload: AgentMailWebhookPayload,
+  secret: string,
+  rawBody?: string
+): string {
+  const timestamp = String(payload.timestamp ?? '');
+  const signedContent =
+    rawBody !== undefined
+      ? `${timestamp}.${rawBody}`
+      : `${timestamp}.${computeAgentMailContentDigest(payload)}`;
+  return createHmac('sha256', secret).update(signedContent).digest('hex');
+}
+
+/**
  * AgentMail Inbound Adapter.
  *
  * Implements ADR-006 & DEMO-002:
@@ -135,6 +198,13 @@ export class AgentMailChannelAdapter {
   private readonly webhookSecret?: string;
   private readonly clockSkewToleranceMs: number;
   private readonly now: () => number;
+  private readonly trustedTenantId?: TenantId;
+  private readonly trustedInstallationId?: string;
+  private readonly resolveTenant?: (
+    installationId: string,
+    from: string,
+    to: string
+  ) => Promise<TenantId> | TenantId;
 
   constructor(options: AgentMailAdapterOptions) {
     this.store = options.store;
@@ -143,18 +213,38 @@ export class AgentMailChannelAdapter {
     this.webhookSecret = options.webhookSecret;
     this.clockSkewToleranceMs = options.clockSkewToleranceMs ?? 300_000; // 5 minutes
     this.now = options.now ?? (() => Date.now());
+    this.trustedTenantId = options.trustedTenantId;
+    this.trustedInstallationId = options.trustedInstallationId;
+    this.resolveTenant = options.resolveTenant;
   }
 
   /**
    * Verifies HMAC-SHA256 webhook signature and timestamp replay tolerance.
    */
-  verifyWebhook(payload: AgentMailWebhookPayload, signatureHeader?: string): void {
-    // 1. Timestamp replay defense
+  verifyWebhook(
+    payload: AgentMailWebhookPayload,
+    signatureHeader?: string,
+    rawBody?: string
+  ): void {
+    // 1. Mandatory timestamp when webhookSecret is configured (replay defense)
+    if (this.webhookSecret && payload.timestamp === undefined) {
+      throw new HarnessError(
+        'MISSING_WEBHOOK_TIMESTAMP',
+        'AgentMail webhook timestamp is mandatory when webhookSecret is configured'
+      );
+    }
+
     if (payload.timestamp !== undefined) {
       const ts =
         typeof payload.timestamp === 'number'
           ? payload.timestamp
           : new Date(payload.timestamp).getTime();
+      if (!Number.isFinite(ts) || Number.isNaN(ts)) {
+        throw new HarnessError(
+          'INVALID_WEBHOOK_TIMESTAMP',
+          `AgentMail webhook timestamp ${payload.timestamp} is not a valid date or timestamp`
+        );
+      }
       const current = this.now();
       const diff = Math.abs(current - ts);
       if (diff > this.clockSkewToleranceMs) {
@@ -175,11 +265,7 @@ export class AgentMailChannelAdapter {
         );
       }
 
-      const signedPayload = `${payload.messageId}:${payload.from}:${payload.timestamp ?? ''}`;
-      const expectedHmac = createHmac('sha256', this.webhookSecret)
-        .update(signedPayload)
-        .digest('hex');
-
+      const expectedHmac = computeAgentMailSignature(payload, this.webhookSecret, rawBody);
       const expectedBuffer = Buffer.from(expectedHmac, 'utf8');
       const providedBuffer = Buffer.from(signatureToVerify, 'utf8');
 
@@ -200,15 +286,132 @@ export class AgentMailChannelAdapter {
    */
   async handleAgentMailWebhook(
     payload: AgentMailWebhookPayload,
-    signatureHeader?: string
+    signatureHeader?: string,
+    rawBody?: string
   ): Promise<AgentMailIngestResult> {
     // 1. Verify webhook signature & timestamp replay
-    this.verifyWebhook(payload, signatureHeader);
+    this.verifyWebhook(payload, signatureHeader, rawBody);
 
-    const tenantId = payload.tenantId;
+    // 2. When rawBody is provided, verify raw bytes, then parse and normalize those verified bytes internally
+    let verifiedPayload: AgentMailWebhookPayload = payload;
+    if (rawBody !== undefined) {
+      const rawString = typeof rawBody === 'string' ? rawBody : Buffer.from(rawBody).toString('utf8');
+      let parsedRaw: any;
+      try {
+        parsedRaw = JSON.parse(rawString);
+      } catch (err) {
+        throw new HarnessError(
+          'INVALID_RAW_BODY_JSON',
+          `Failed to parse verified rawBody as JSON: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
 
-    // 2. Validate all attachments (magic bytes, size bounds, and exact-byte SHA-256)
-    const attachments = payload.attachments ?? [];
+      // Detect any spoofing or mismatch between supplied payload and verified raw body
+      if (payload) {
+        if (payload.tenantId && parsedRaw.tenantId && payload.tenantId !== parsedRaw.tenantId) {
+          throw new HarnessError(
+            'PAYLOAD_RAW_BODY_MISMATCH',
+            `Supplied payload tenantId (${payload.tenantId}) does not match authenticated rawBody tenantId (${parsedRaw.tenantId})`
+          );
+        }
+        if (payload.installationId && parsedRaw.installationId && payload.installationId !== parsedRaw.installationId) {
+          throw new HarnessError(
+            'PAYLOAD_RAW_BODY_MISMATCH',
+            `Supplied payload installationId (${payload.installationId}) does not match authenticated rawBody installationId (${parsedRaw.installationId})`
+          );
+        }
+        if (payload.messageId && parsedRaw.messageId && payload.messageId !== parsedRaw.messageId) {
+          throw new HarnessError(
+            'PAYLOAD_RAW_BODY_MISMATCH',
+            `Supplied payload messageId (${payload.messageId}) does not match authenticated rawBody messageId (${parsedRaw.messageId})`
+          );
+        }
+        if (payload.from && parsedRaw.from && payload.from !== parsedRaw.from) {
+          throw new HarnessError(
+            'PAYLOAD_RAW_BODY_MISMATCH',
+            `Supplied payload from (${payload.from}) does not match authenticated rawBody from (${parsedRaw.from})`
+          );
+        }
+        if (payload.to && parsedRaw.to && payload.to !== parsedRaw.to) {
+          throw new HarnessError(
+            'PAYLOAD_RAW_BODY_MISMATCH',
+            `Supplied payload to (${payload.to}) does not match authenticated rawBody to (${parsedRaw.to})`
+          );
+        }
+        if (payload.threadId && parsedRaw.threadId && payload.threadId !== parsedRaw.threadId) {
+          throw new HarnessError(
+            'PAYLOAD_RAW_BODY_MISMATCH',
+            `Supplied payload threadId (${payload.threadId}) does not match authenticated rawBody threadId (${parsedRaw.threadId})`
+          );
+        }
+        if (payload.subject && parsedRaw.subject && payload.subject !== parsedRaw.subject) {
+          throw new HarnessError(
+            'PAYLOAD_RAW_BODY_MISMATCH',
+            `Supplied payload subject does not match authenticated rawBody subject`
+          );
+        }
+      }
+
+      const parsedAttachments: AgentMailAttachment[] = Array.isArray(parsedRaw.attachments)
+        ? parsedRaw.attachments.map((att: any) => ({
+            filename: String(att.filename ?? ''),
+            mimeType: String(att.mimeType ?? ''),
+            content: att.content instanceof Uint8Array
+              ? att.content
+              : typeof att.content === 'string'
+                ? Buffer.from(att.content, att.contentEncoding === 'base64' ? 'base64' : 'utf8')
+                : new Uint8Array(),
+          }))
+        : (payload.attachments ?? []);
+
+      verifiedPayload = {
+        tenantId: parsedRaw.tenantId ?? payload.tenantId,
+        installationId: parsedRaw.installationId ?? payload.installationId,
+        messageId: parsedRaw.messageId ?? payload.messageId,
+        threadId: parsedRaw.threadId ?? payload.threadId,
+        from: parsedRaw.from ?? payload.from,
+        to: parsedRaw.to ?? payload.to,
+        subject: parsedRaw.subject ?? payload.subject,
+        text: parsedRaw.text ?? payload.text,
+        html: parsedRaw.html ?? payload.html,
+        attachments: parsedAttachments,
+        timestamp: parsedRaw.timestamp ?? payload.timestamp,
+        signature: parsedRaw.signature ?? payload.signature,
+      };
+    }
+
+    // 3. Resolve tenant/installation through trusted configuration
+    let tenantId = verifiedPayload.tenantId;
+    if (this.trustedTenantId) {
+      if (verifiedPayload.tenantId && verifiedPayload.tenantId !== this.trustedTenantId) {
+        throw new HarnessError(
+          'UNAUTHORIZED_TENANT',
+          `Tenant ${verifiedPayload.tenantId} is unauthorized (must be ${this.trustedTenantId})`
+        );
+      }
+      tenantId = this.trustedTenantId;
+    } else if (this.resolveTenant) {
+      tenantId = await this.resolveTenant(
+        verifiedPayload.installationId,
+        verifiedPayload.from,
+        verifiedPayload.to
+      );
+    }
+
+    if (this.trustedInstallationId) {
+      if (
+        verifiedPayload.installationId &&
+        verifiedPayload.installationId !== this.trustedInstallationId
+      ) {
+        throw new HarnessError(
+          'UNAUTHORIZED_INSTALLATION',
+          `Installation ${verifiedPayload.installationId} is unauthorized (must be ${this.trustedInstallationId})`
+        );
+      }
+    }
+
+    // 4. Validate all attachments (magic bytes, size bounds, and exact-byte SHA-256)
+    const attachments = verifiedPayload.attachments ?? [];
     const attachmentHashes: string[] = [];
 
     for (const att of attachments) {
@@ -217,13 +420,13 @@ export class AgentMailChannelAdapter {
       attachmentHashes.push(hash);
     }
 
-    // 3. Resolve principal binding
+    // 5. Resolve principal binding
     // Sender email address NEVER confers vendor or FinanceAdmin authority by itself (ADR-006 §12, Abuse case 4)
     let binding = await this.store.getPrincipalBinding(
       tenantId,
       'AGENTMAIL',
-      payload.installationId,
-      payload.from
+      verifiedPayload.installationId,
+      verifiedPayload.from
     );
 
     // Also check standard EMAIL provider if not found under AGENTMAIL
@@ -231,8 +434,8 @@ export class AgentMailChannelAdapter {
       binding = await this.store.getPrincipalBinding(
         tenantId,
         'EMAIL',
-        payload.installationId,
-        payload.from
+        verifiedPayload.installationId,
+        verifiedPayload.from
       );
     }
 
@@ -241,7 +444,7 @@ export class AgentMailChannelAdapter {
       if (binding.revoked) {
         throw new HarnessError(
           'REVOKED_CHANNEL_USER',
-          `AgentMail user binding for ${payload.from} on ${payload.installationId} is revoked`
+          `AgentMail user binding for ${verifiedPayload.from} on ${verifiedPayload.installationId} is revoked`
         );
       }
       principal = {
@@ -255,23 +458,23 @@ export class AgentMailChannelAdapter {
       // Cannot execute financial commands or approve invoices
       principal = {
         tenantId,
-        principalId: `agentmail-sender-${payload.from.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+        principalId: `agentmail-sender-${verifiedPayload.from.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
         roles: ['InboundSender'],
         bindingRevision: 'rev-0',
       };
     }
 
-    const providerEventId = `agentmail-evt-${payload.messageId}`;
-    const providerThreadId = payload.threadId ?? `thread-${payload.messageId}`;
+    const providerEventId = `agentmail-evt-${verifiedPayload.messageId}`;
+    const providerThreadId = verifiedPayload.threadId ?? `thread-${verifiedPayload.messageId}`;
 
     const rawCommand = {
       provider: 'AGENTMAIL' as const,
-      installationId: payload.installationId,
+      installationId: verifiedPayload.installationId,
       providerEventId,
-      providerUserId: payload.from,
+      providerUserId: verifiedPayload.from,
       providerThreadId,
-      messageId: payload.messageId,
-      text: payload.text ?? payload.subject,
+      messageId: verifiedPayload.messageId,
+      text: verifiedPayload.text ?? verifiedPayload.subject,
       attachmentRefs: attachmentHashes,
     };
 
@@ -282,13 +485,13 @@ export class AgentMailChannelAdapter {
       payloadDigest,
     };
 
-    // 4. Create or load via AssignmentService (transactional idempotency + digest matching)
+    // 6. Create or load via AssignmentService (transactional idempotency + digest matching)
     const { assignment, isDuplicate } = await this.service.createOrLoad(
       command,
       principal
     );
 
-    // 5. If fresh inbound delivery and attachments exist, ingest first document into L1
+    // 7. If fresh inbound delivery and attachments exist, ingest first document into L1
     let evidenceRef: EvidenceRunReference | undefined;
     if (!isDuplicate && this.evidencePort && attachments.length > 0) {
       const firstAtt = attachments[0]!;
@@ -307,7 +510,7 @@ export class AgentMailChannelAdapter {
           channel: firstAtt.mimeType === 'application/pdf' ? 'PDF' : 'EMAIL',
           mimeType: firstAtt.mimeType,
           displayName: firstAtt.filename,
-          originMessageId: payload.messageId,
+          originMessageId: verifiedPayload.messageId,
         },
         executionCtx
       );
@@ -329,3 +532,4 @@ export class AgentMailChannelAdapter {
     };
   }
 }
+

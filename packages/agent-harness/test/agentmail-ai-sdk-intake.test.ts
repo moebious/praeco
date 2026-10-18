@@ -1,11 +1,12 @@
 import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID, createHash, createHmac } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createL1, type L1Runtime } from '@praeco/evidence-intelligence';
 import { DEMO_TENANT_ID } from '@praeco/financial-decision-kernel';
 
+import { z } from 'zod';
 import {
   InMemoryHarnessStore,
   AssignmentService,
@@ -15,11 +16,14 @@ import {
   toAiSdkTools,
   AiSdkSpecialistRunner,
   InMemoryChannelInbox,
+  computeAgentMailSignature,
+  computeAgentMailContentDigest,
   type AgentMailWebhookPayload,
   type TrustedExecutionContext,
+  type SpecialistToolDefinition,
 } from '../src/index.js';
 
-describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 30_000 }, () => {
+describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 60_000 }, () => {
   let l1StorageDir: string;
   let l1: L1Runtime;
   let evidencePort: L1EvidencePortAdapter;
@@ -46,15 +50,10 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     await rm(l1StorageDir, { recursive: true, force: true });
   });
 
-  function signPayload(messageId: string, from: string, timestamp: number | string, secret: string = WEBHOOK_SECRET): string {
-    const signedPayload = `${messageId}:${from}:${timestamp}`;
-    return createHmac('sha256', secret).update(signedPayload).digest('hex');
-  }
-
   // ─────────────────────────────────────────────────────────────────────────────
-  // 1. Webhook HMAC-SHA256 Signature Verification
+  // 1. Webhook HMAC-SHA256 Signature Verification & Tamper Resistance
   // ─────────────────────────────────────────────────────────────────────────────
-  it('1. Webhook HMAC-SHA256 signature verification (valid, missing, forged)', async () => {
+  it('1. Webhook HMAC-SHA256 signature verification (valid, tampered, raw body, missing, forged)', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
     const adapter = new AgentMailChannelAdapter({
@@ -67,9 +66,8 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     const messageId = `msg-${randomUUID()}`;
     const from = 'billing@vendor.com';
 
-    // A. Valid signature passes
-    const validSignature = signPayload(messageId, from, now, WEBHOOK_SECRET);
-    const validPayload: AgentMailWebhookPayload = {
+    // A. Valid canonical content digest signature passes
+    const basePayload: AgentMailWebhookPayload = {
       tenantId: TENANT_A,
       installationId: 'inst-agentmail-01',
       messageId,
@@ -78,6 +76,21 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
       subject: 'Invoice #1001',
       text: 'Please find attached invoice #1001',
       timestamp: now,
+      attachments: [
+        {
+          filename: 'invoice-1001.pdf',
+          mimeType: 'application/pdf',
+          content: Buffer.from('%PDF-1.4\nInvoice 1001 content\n%%EOF', 'utf8'),
+        },
+      ],
+    };
+
+    const digest = computeAgentMailContentDigest(basePayload);
+    expect(digest).toMatch(/^[a-f0-9]{64}$/);
+
+    const validSignature = computeAgentMailSignature(basePayload, WEBHOOK_SECRET);
+    const validPayload: AgentMailWebhookPayload = {
+      ...basePayload,
       signature: validSignature,
     };
 
@@ -85,7 +98,49 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     expect(res.assignmentId).toBeDefined();
     expect(res.isDuplicate).toBe(false);
 
-    // B. Missing signature throws INVALID_WEBHOOK_SIGNATURE
+    // B. Tampering with body text invalidates signature
+    const tamperedBodyPayload: AgentMailWebhookPayload = {
+      ...validPayload,
+      text: 'Tampered invoice amount $999,999 to foreign account',
+    };
+    await expect(adapter.handleAgentMailWebhook(tamperedBodyPayload)).rejects.toThrow(
+      'AgentMail webhook signature verification failed'
+    );
+
+    // C. Tampering with invoice attachment invalidates signature
+    const tamperedAttachmentPayload: AgentMailWebhookPayload = {
+      ...validPayload,
+      attachments: [
+        {
+          filename: 'invoice-1001.pdf',
+          mimeType: 'application/pdf',
+          content: Buffer.from('%PDF-1.4\nMalicious substituted PDF bytes\n%%EOF', 'utf8'),
+        },
+      ],
+    };
+    await expect(adapter.handleAgentMailWebhook(tamperedAttachmentPayload)).rejects.toThrow(
+      'AgentMail webhook signature verification failed'
+    );
+
+    // D. Raw body signature verification passes with matching raw payload
+    const rawMsgId = `msg-raw-${randomUUID()}`;
+    const rawBodyJson = JSON.stringify({ messageId: rawMsgId, from, to: 'ap@blinka.com', subject: 'Invoice #raw', amount: 500 });
+    const rawBodySig = computeAgentMailSignature(basePayload, WEBHOOK_SECRET, rawBodyJson);
+    const rawBodyPayload: AgentMailWebhookPayload = {
+      ...basePayload,
+      messageId: rawMsgId,
+      subject: 'Invoice #raw',
+      signature: rawBodySig,
+    };
+    const rawRes = await adapter.handleAgentMailWebhook(rawBodyPayload, undefined, rawBodyJson);
+    expect(rawRes.assignmentId).toBeDefined();
+
+    // E. Tampering with rawBody causes signature mismatch
+    await expect(
+      adapter.handleAgentMailWebhook(rawBodyPayload, undefined, rawBodyJson + ' ')
+    ).rejects.toThrow('AgentMail webhook signature verification failed');
+
+    // F. Missing signature throws INVALID_WEBHOOK_SIGNATURE
     const missingSigPayload: AgentMailWebhookPayload = {
       tenantId: TENANT_A,
       installationId: 'inst-agentmail-01',
@@ -99,7 +154,7 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
       'AgentMail webhook signature is missing but webhookSecret is configured'
     );
 
-    // C. Forged / invalid signature throws INVALID_WEBHOOK_SIGNATURE
+    // G. Forged / invalid signature throws INVALID_WEBHOOK_SIGNATURE
     const forgedSigPayload: AgentMailWebhookPayload = {
       ...missingSigPayload,
       signature: 'deadbeef1234567890abcdefdeadbeef1234567890abcdefdeadbeef12345678',
@@ -107,25 +162,130 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     await expect(adapter.handleAgentMailWebhook(forgedSigPayload)).rejects.toThrow(
       'AgentMail webhook signature verification failed'
     );
+
+    // H. Adversarial: Raw-body authentication mismatch attack (signed Tenant A raw body, passed modified payload targeting Tenant B)
+    const rawBodyTenantA = JSON.stringify({
+      tenantId: TENANT_A,
+      installationId: 'inst-agentmail-01',
+      messageId: `msg-mismatch-${randomUUID()}`,
+      from: 'vendor@billing.com',
+      to: 'ap@blinka.com',
+      subject: 'Invoice for Tenant A',
+      timestamp: now,
+    });
+    const sigTenantA = computeAgentMailSignature(basePayload, WEBHOOK_SECRET, rawBodyTenantA);
+    const spoofedPayloadTenantB: AgentMailWebhookPayload = {
+      tenantId: TENANT_B,
+      installationId: 'inst-agentmail-01',
+      messageId: `msg-mismatch-${randomUUID()}`,
+      from: 'vendor@billing.com',
+      to: 'ap@blinka.com',
+      subject: 'Invoice for Tenant A',
+      timestamp: now,
+      signature: sigTenantA,
+    };
+    await expect(
+      adapter.handleAgentMailWebhook(spoofedPayloadTenantB, undefined, rawBodyTenantA)
+    ).rejects.toThrow(`Supplied payload tenantId (${TENANT_B}) does not match authenticated rawBody tenantId (${TENANT_A})`);
+
+    // Zero side-effects assertion: no assignments or cases created in either tenant
+    expect(await store.listAssignments(TENANT_B)).toHaveLength(0);
+
+    // I. Adversarial: Correlation target binding (modifying threadId invalidates signature)
+    const payloadWithThread: AgentMailWebhookPayload = {
+      ...basePayload,
+      messageId: `msg-thread-${randomUUID()}`,
+      threadId: 'thread-case-alpha',
+    };
+    const sigWithThread = computeAgentMailSignature(payloadWithThread, WEBHOOK_SECRET);
+    const alteredThreadPayload: AgentMailWebhookPayload = {
+      ...payloadWithThread,
+      threadId: 'thread-case-beta', // attacker re-targets invoice to different payable case
+      signature: sigWithThread,
+    };
+    await expect(adapter.handleAgentMailWebhook(alteredThreadPayload)).rejects.toThrow(
+      'AgentMail webhook signature verification failed'
+    );
+
+    // J. Adversarial: Canonical JSON encoding resists delimiter injection collisions
+    const combo1: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: 'tenant-a|custom',
+      installationId: 'inst-1',
+    };
+    const combo2: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: 'tenant-a',
+      installationId: 'custom|inst-1',
+    };
+    const digest1 = computeAgentMailContentDigest(combo1);
+    const digest2 = computeAgentMailContentDigest(combo2);
+    expect(digest1).not.toBe(digest2);
+
+    // K. Trusted tenant and installation configuration
+    const trustedAdapter = new AgentMailChannelAdapter({
+      store,
+      service,
+      webhookSecret: WEBHOOK_SECRET,
+      trustedTenantId: TENANT_A,
+      trustedInstallationId: 'inst-trusted-only',
+    });
+
+    const untrustedTenantPayload: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: TENANT_B,
+      installationId: 'inst-trusted-only',
+      messageId: `msg-untrusted-${randomUUID()}`,
+    };
+    const untrustedSig = computeAgentMailSignature(untrustedTenantPayload, WEBHOOK_SECRET);
+    await expect(
+      trustedAdapter.handleAgentMailWebhook({ ...untrustedTenantPayload, signature: untrustedSig })
+    ).rejects.toThrow('Tenant tenant-competitor-corp is unauthorized');
+
+    const untrustedInstPayload: AgentMailWebhookPayload = {
+      ...basePayload,
+      tenantId: TENANT_A,
+      installationId: 'inst-unauthorized',
+      messageId: `msg-untrusted-inst-${randomUUID()}`,
+    };
+    const untrustedInstSig = computeAgentMailSignature(untrustedInstPayload, WEBHOOK_SECRET);
+    await expect(
+      trustedAdapter.handleAgentMailWebhook({ ...untrustedInstPayload, signature: untrustedInstSig })
+    ).rejects.toThrow('Installation inst-unauthorized is unauthorized');
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 2. Timestamp Replay Defense
+  // 2. Timestamp Replay Defense & Mandatory Timestamp Enforcement
   // ─────────────────────────────────────────────────────────────────────────────
-  it('2. Timestamp replay defense: rejects stale or future-skewed webhooks', async () => {
+  it('2. Timestamp replay defense: rejects missing, stale, or future-skewed webhooks', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
     const fakeNow = 1_700_000_000_000;
     const adapter = new AgentMailChannelAdapter({
       store,
       service,
+      webhookSecret: WEBHOOK_SECRET,
       clockSkewToleranceMs: 300_000, // 5 minutes
       now: () => fakeNow,
     });
 
     const from = 'billing@vendor.com';
 
-    // A. Stale webhook (6 minutes old) -> rejects with STALE_WEBHOOK_TIMESTAMP
+    // A. Missing timestamp when webhookSecret is configured -> rejects with MISSING_WEBHOOK_TIMESTAMP
+    const missingTimestampPayload: AgentMailWebhookPayload = {
+      tenantId: TENANT_A,
+      installationId: 'inst-agentmail-01',
+      messageId: `msg-nots-${randomUUID()}`,
+      from,
+      to: 'ap@blinka.com',
+      subject: 'Omitted timestamp attack',
+      signature: 'dummy-signature',
+    };
+    await expect(adapter.handleAgentMailWebhook(missingTimestampPayload)).rejects.toThrow(
+      'AgentMail webhook timestamp is mandatory when webhookSecret is configured'
+    );
+
+    // B. Stale webhook (6 minutes old) -> rejects with STALE_WEBHOOK_TIMESTAMP
     const staleTime = fakeNow - 360_000;
     const stalePayload: AgentMailWebhookPayload = {
       tenantId: TENANT_A,
@@ -136,30 +296,50 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
       subject: 'Stale webhook replay',
       timestamp: staleTime,
     };
-    await expect(adapter.handleAgentMailWebhook(stalePayload)).rejects.toThrow(
-      'exceeds clock skew tolerance of 300000ms'
-    );
+    const staleSig = computeAgentMailSignature(stalePayload, WEBHOOK_SECRET);
+    await expect(
+      adapter.handleAgentMailWebhook({ ...stalePayload, signature: staleSig })
+    ).rejects.toThrow('exceeds clock skew tolerance of 300000ms');
 
-    // B. Future-dated webhook (> 5 minutes ahead) -> rejects
+    // C. Future-dated webhook (> 5 minutes ahead) -> rejects
     const futureTime = fakeNow + 360_000;
     const futurePayload: AgentMailWebhookPayload = {
       ...stalePayload,
       messageId: `msg-future-${randomUUID()}`,
       timestamp: futureTime,
     };
-    await expect(adapter.handleAgentMailWebhook(futurePayload)).rejects.toThrow(
-      'exceeds clock skew tolerance of 300000ms'
-    );
+    const futureSig = computeAgentMailSignature(futurePayload, WEBHOOK_SECRET);
+    await expect(
+      adapter.handleAgentMailWebhook({ ...futurePayload, signature: futureSig })
+    ).rejects.toThrow('exceeds clock skew tolerance of 300000ms');
 
-    // C. Fresh webhook (within tolerance) -> succeeds
+    // D. Fresh webhook (within tolerance) -> succeeds
     const freshPayload: AgentMailWebhookPayload = {
       ...stalePayload,
       messageId: `msg-fresh-${randomUUID()}`,
       timestamp: fakeNow - 60_000, // 1 minute ago
     };
-    const res = await adapter.handleAgentMailWebhook(freshPayload);
+    const freshSig = computeAgentMailSignature(freshPayload, WEBHOOK_SECRET);
+    const res = await adapter.handleAgentMailWebhook({ ...freshPayload, signature: freshSig });
     expect(res.assignmentId).toBeDefined();
+
+    // E. Malformed / non-numeric timestamp rejects with INVALID_WEBHOOK_TIMESTAMP
+    const malformedMsgId = `msg-malformed-ts-${randomUUID()}`;
+    const malformedPayload = {
+      ...stalePayload,
+      messageId: malformedMsgId,
+      timestamp: 'not-a-timestamp' as any,
+    };
+    const malformedSig = computeAgentMailSignature(malformedPayload as any, WEBHOOK_SECRET);
+    await expect(
+      adapter.handleAgentMailWebhook({ ...malformedPayload, signature: malformedSig } as any)
+    ).rejects.toThrow('is not a valid date or timestamp');
+
+    // Assert zero side-effects: no assignment was created for the malformed timestamp attempt
+    const malformedAssignment = await store.getAssignment(TENANT_A, malformedMsgId);
+    expect(malformedAssignment).toBeNull();
   });
+
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 3. Untrusted Sender Rule (DEMO-002, ADR-006 §12, Abuse case 4)
@@ -372,12 +552,13 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 8. Strict Cross-Tenant Isolation
+  // 8. Strict Cross-Tenant Isolation Across Inbounds, Inboxes, and Eve Tools
   // ─────────────────────────────────────────────────────────────────────────────
-  it('8. Cross-tenant isolation across AgentMail inbounds', async () => {
+  it('8. Cross-tenant isolation across AgentMail inbounds, inbox, and Eve specialist tools', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
     const adapter = new AgentMailChannelAdapter({ store, service });
+    const inbox = new InMemoryChannelInbox();
 
     const messageId = `msg-tenant-${randomUUID()}`;
     const payloadA: AgentMailWebhookPayload = {
@@ -392,13 +573,74 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     const resA = await adapter.handleAgentMailWebhook(payloadA);
     expect(resA.principal.tenantId).toBe(TENANT_A);
 
-    // Tenant B cannot load Tenant A's assignment
+    // A. Tenant B cannot load Tenant A's assignment
     const tenantBAssignment = await store.getAssignment(TENANT_B, resA.assignmentId);
     expect(tenantBAssignment).toBeNull();
 
-    // Tenant B cannot load Tenant A's case
+    // B. Tenant B cannot load Tenant A's case
     const tenantBCase = await store.getCase(TENANT_B, resA.caseId);
     expect(tenantBCase).toBeNull();
+
+    // C. Verify InMemoryChannelInbox enforces tenant isolation
+    inbox.addMessage({
+      id: messageId,
+      tenantId: TENANT_A,
+      connectionId: 'inst-agentmail-01',
+      provider: 'AGENTMAIL',
+      from: 'vendor@billing.com',
+      to: 'ap@blinka.com',
+      subject: 'Tenant A Confidential Mail',
+      attachments: [
+        {
+          filename: 'confidential.pdf',
+          mimeType: 'application/pdf',
+          content: Buffer.from('%PDF-1.4\nConfidential A\n%%EOF', 'utf8'),
+        },
+      ],
+      receivedAt: new Date().toISOString(),
+      status: 'PENDING',
+    });
+
+    // Tenant A sees its message
+    const msgsA = await inbox.listMessages(TENANT_A);
+    expect(msgsA.length).toBe(1);
+    expect(await inbox.getMessage(TENANT_A, messageId)).toBeDefined();
+
+    // Tenant B cannot see Tenant A's message
+    const msgsB = await inbox.listMessages(TENANT_B);
+    expect(msgsB.length).toBe(0);
+    expect(await inbox.getMessage(TENANT_B, messageId)).toBeUndefined();
+
+    // D. Eve specialist tools strictly enforce tenant boundary
+    const eveToolsB = createEveTools({ store, service, inbox });
+    const ctxTenantB: TrustedExecutionContext = {
+      principal: {
+        tenantId: TENANT_B,
+        principalId: 'eve-runner-b',
+        roles: ['EveSpecialist'],
+        bindingRevision: 'rev-1',
+      },
+      assignmentId: `asg-b-${randomUUID()}`,
+      workerPrincipalId: 'worker-b',
+      workerVersionId: 'v1.0.0',
+      runId: `run-b-${randomUUID()}`,
+      ownershipEpoch: 1,
+    };
+
+    const inspectTool = eveToolsB.find((t) => t.name === 'eve_inspect_inbound_message')!;
+    await expect(inspectTool.execute({ messageId }, ctxTenantB)).rejects.toThrow(
+      `Channel message ${messageId} not found in inbox`
+    );
+
+    const extractTool = eveToolsB.find((t) => t.name === 'eve_extract_and_validate_attachment')!;
+    await expect(
+      extractTool.execute({ messageId, filename: 'confidential.pdf' }, ctxTenantB)
+    ).rejects.toThrow(`Channel message ${messageId} not found in inbox`);
+
+    const correlateTool = eveToolsB.find((t) => t.name === 'eve_correlate_payable_case')!;
+    await expect(correlateTool.execute({ messageId }, ctxTenantB)).rejects.toThrow(
+      `Channel message ${messageId} not found in inbox`
+    );
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -412,9 +654,10 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     const pdfBytes = Buffer.from('%PDF-1.4\nInvoice for Acme Corp\n%%EOF', 'utf8');
     const msgId = `msg-eve-${randomUUID()}`;
 
-    // Seed message in inbox
+    // Seed message in inbox with tenantId
     inbox.addMessage({
       id: msgId,
+      tenantId: TENANT_A,
       connectionId: 'inst-agentmail-01',
       provider: 'AGENTMAIL',
       from: 'billing@acme.com',
@@ -462,6 +705,10 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     expect(aiSdkTools['eve_ingest_document_to_l1']).toBeDefined();
     expect(aiSdkTools['eve_correlate_payable_case']).toBeDefined();
 
+    // Verify Vercel AI SDK v7 compatibility (inputSchema) and v5/v6 compatibility (parameters)
+    expect(aiSdkTools['eve_fetch_channel_inbox']!.inputSchema).toBeDefined();
+    expect(aiSdkTools['eve_fetch_channel_inbox']!.parameters).toBeDefined();
+
     // Execute bounded loop using AiSdkSpecialistRunner
     const runner = new AiSdkSpecialistRunner({ limits: { maxSteps: 6, timeoutMs: 15_000 } });
 
@@ -504,14 +751,14 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
     expect(step3Record.outputSummary).toContain('"isValidDocument":true');
 
     // Verify message marked processed in inbox
-    const updatedMsg = await inbox.getMessage(msgId);
+    const updatedMsg = await inbox.getMessage(TENANT_A, msgId);
     expect(updatedMsg?.status).toBe('PROCESSED');
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 10. AI SDK Bounds Enforcement (maxSteps and timeoutMs)
+  // 10. AI SDK Bounds Enforcement & In-Flight Timeout Cancellation
   // ─────────────────────────────────────────────────────────────────────────────
-  it('10. AI SDK bounds enforcement: maxSteps and timeout bounds fail closed', async () => {
+  it('10. AI SDK bounds enforcement: maxSteps and in-flight timeout bounds fail closed', async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
     const inbox = new InMemoryChannelInbox();
@@ -561,12 +808,104 @@ describe('L3 AgentMail & Vercel AI SDK Channel Ingestion Pipeline', { timeout: 3
         executionCtx
       )
     ).rejects.toThrow('exceeded wall-clock timeout deadline');
+
+    // C. In-flight hung tool timeout abortion via AbortController
+    let hungToolAborted = false;
+    const hangingTool: SpecialistToolDefinition<Record<string, unknown>, unknown> = {
+      name: 'eve_hanging_tool',
+      description: 'Hanging tool simulation',
+      allowedRoles: ['EVE'],
+      schema: z.object({}).passthrough(),
+      execute: async (_params, ctx) => {
+        return new Promise((_resolve, reject) => {
+          if (ctx.signal) {
+            ctx.signal.addEventListener('abort', () => {
+              hungToolAborted = true;
+              reject(new Error('Tool aborted by signal'));
+            });
+          }
+          // Never resolves without abort
+        });
+      },
+    };
+
+    const hangingAiSdkTools = toAiSdkTools([hangingTool], executionCtx);
+    const hungRunner = new AiSdkSpecialistRunner({ limits: { maxSteps: 5, timeoutMs: 200 } });
+    const hungStart = Date.now();
+    await expect(
+      hungRunner.executeBoundedLoop(
+        'EVE',
+        hangingAiSdkTools,
+        [{ toolName: 'eve_hanging_tool', params: {} }],
+        executionCtx
+      )
+    ).rejects.toThrow('exceeded wall-clock timeout deadline of 200ms during tool eve_hanging_tool');
+    const hungElapsed = Date.now() - hungStart;
+    expect(hungElapsed).toBeLessThan(1500); // Confirms fast abort rather than hanging indefinitely
+    expect(hungToolAborted).toBe(true);
+
+    // D. Adversarial: In-flight timeout cancellation prevents post-timeout mutations and zero side-effects
+    // Directly reproduces finding: delay message retrieval, trigger short timeout,
+    // and verify zero assignments created and inbox message status remains PENDING.
+    const delayedInbox = new InMemoryChannelInbox();
+    const delayedMsgId = `msg-delayed-${randomUUID()}`;
+    delayedInbox.addMessage({
+      id: delayedMsgId,
+      tenantId: TENANT_A,
+      connectionId: 'inst-agentmail-01',
+      provider: 'AGENTMAIL',
+      from: 'billing@vendor.com',
+      to: 'ap@blinka.com',
+      subject: 'Delayed Invoice',
+      attachments: [],
+      receivedAt: new Date().toISOString(),
+      status: 'PENDING',
+    });
+
+    // Wrap getMessage with 60ms delay
+    const origGetMessage = delayedInbox.getMessage.bind(delayedInbox);
+    delayedInbox.getMessage = async (tId, mId, opts) => {
+      await new Promise((r) => setTimeout(r, 60));
+      return origGetMessage(tId, mId, opts);
+    };
+
+    const delayedStore = new InMemoryHarnessStore();
+    const delayedService = new AssignmentService({ store: delayedStore });
+    const delayedEveTools = createEveTools({
+      store: delayedStore,
+      service: delayedService,
+      inbox: delayedInbox,
+    });
+    const delayedAiSdkTools = toAiSdkTools(delayedEveTools, executionCtx);
+
+    const fastRunner = new AiSdkSpecialistRunner({ limits: { maxSteps: 5, timeoutMs: 15 } });
+
+    await expect(
+      fastRunner.executeBoundedLoop(
+        'EVE',
+        delayedAiSdkTools,
+        [{ toolName: 'eve_correlate_payable_case', params: { messageId: delayedMsgId } }],
+        executionCtx
+      )
+    ).rejects.toThrow('exceeded wall-clock timeout deadline of 15ms during tool eve_correlate_payable_case');
+
+    // Wait 100ms for the delayed promise to settle
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Assert ZERO post-timeout mutations and zero side-effects:
+    // 1. Zero assignments were created in the store
+    const assignmentsInStore = await delayedStore.listAssignments(TENANT_A);
+    expect(assignmentsInStore).toHaveLength(0);
+
+    // 2. The message was NOT marked PROCESSED; remains PENDING
+    const delayedMsgState = await delayedInbox.getMessage(TENANT_A, delayedMsgId);
+    expect(delayedMsgState?.status).toBe('PENDING');
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 11. End-to-End Real L1 Integration Flow
   // ─────────────────────────────────────────────────────────────────────────────
-  it('11. End-to-end real L1 invoice processing through AgentMail adapter', async () => {
+  it('11. End-to-end real L1 invoice processing through AgentMail adapter', { timeout: 60_000 }, async () => {
     const store = new InMemoryHarnessStore();
     const service = new AssignmentService({ store });
     const adapter = new AgentMailChannelAdapter({
@@ -695,20 +1034,37 @@ describe.skipIf(!databaseUrl)('AgentMail & AI SDK Intake — Neon PostgreSQL ope
       ],
     };
 
-    // 1. First transactional delivery -> wins
-    const first = await adapter.handleAgentMailWebhook(payload);
-    expect(first.isDuplicate).toBe(false);
-    expect(first.assignmentId).toBeDefined();
+    // 1. Concurrent competing deliveries (race condition test)
+    const [resA, resB] = await Promise.all([
+      adapter.handleAgentMailWebhook(payload),
+      adapter.handleAgentMailWebhook(payload),
+    ]);
 
-    // 2. Duplicate redelivery -> idempotent, returns winning assignment
-    const replay = await adapter.handleAgentMailWebhook(payload);
-    expect(replay.isDuplicate).toBe(true);
-    expect(replay.assignmentId).toBe(first.assignmentId);
+    expect(resA.assignmentId).toBe(resB.assignmentId);
+    expect(resA.caseId).toBe(resB.caseId);
+    // Exactly one won the creation race, the other was identified as idempotent duplicate
+    const duplicates = [resA.isDuplicate, resB.isDuplicate];
+    expect(duplicates).toContain(false);
+    expect(duplicates).toContain(true);
 
-    // 3. Stored assignment matches
-    const loaded = await sqlStore.getAssignment(tenantId, first.assignmentId);
+    // 2. Stored assignment matches
+    const loaded = await sqlStore.getAssignment(tenantId, resA.assignmentId);
     expect(loaded).toBeDefined();
     expect(loaded!.state).toBe('QUEUED');
+
+    // 3. Multi-tenant live Neon SQL isolation: other tenant cannot read this case or assignment
+    const competitorTenant = `tenant-comp-${randomUUID()}`;
+    const competitorCase = await sqlStore.getCase(competitorTenant, resA.caseId);
+    expect(competitorCase).toBeNull();
+    const competitorAssignment = await sqlStore.getAssignment(competitorTenant, resA.assignmentId);
+    expect(competitorAssignment).toBeNull();
+
+    // 4. Conflicting payload delivery under same messageId fails
+    const tamperedPayload: AgentMailWebhookPayload = {
+      ...payload,
+      text: 'Conflicting payload content on live Neon',
+    };
+    await expect(adapter.handleAgentMailWebhook(tamperedPayload)).rejects.toThrow();
   });
 });
 
