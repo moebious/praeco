@@ -1,5 +1,5 @@
 import { randomUUID, createHmac } from 'node:crypto';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 import type { ArtifactRef, DocumentIntelligencePort, DocumentSource, FxRateSnapshot, InvoiceEnvelope, ProcessingProvenance } from './contracts.js';
 import { L1_CONTRACT_VERSION } from './contracts.js';
 import { canonicalJson, digest, L1Error } from './integrity.js';
@@ -12,7 +12,7 @@ import { LlamaCloudAdapter } from './llamacloud.js';
 import type { LlamaCloudOptions } from './llamacloud.js';
 import type { ExtractionPort, ExtractionDraft, ParsedDocument, ImmutablePersistencePort } from './document-processing-ports.js';
 import { EvidenceVerifier, VERIFIER_VERSION } from './verifier.js';
-import { parseEnvelope, ReportSchema } from './schemas.js';
+import { ArtifactSchema, IdSchema, parseEnvelope, ReportSchema } from './schemas.js';
 import { isSupplementalContext } from './context.js';
 
 export interface L1Options {
@@ -35,8 +35,14 @@ export interface EvidenceReader {
 }
 export interface L1Runtime extends DocumentIntelligencePort {
   register(input: SourceInput): Promise<DocumentSource>;
+  processWithReceipt(source: DocumentSource): Promise<L1ProcessingResult>;
   replay(tenantId: string, envelopeId: string): Promise<InvoiceEnvelope>;
   readonly reader: EvidenceReader;
+}
+export interface L1ProcessingResult {
+  pipelineRunId: string;
+  sourceDisposition: 'INVOICE_OR_UNCERTAIN' | 'SUPPLEMENTAL_CONTEXT';
+  envelopes: readonly InvoiceEnvelope[];
 }
 
 export function createL1(options: L1Options): L1Runtime {
@@ -46,7 +52,15 @@ export function createL1(options: L1Options): L1Runtime {
   const verifier = new EvidenceVerifier(store, rates, now);
   const reader: EvidenceReader = {
     load: (tenantId, envelopeId) => store.loadEnvelope(tenantId, envelopeId),
-    loadRun: (tenantId, runId) => store.lookup(tenantId, 'runs', `${runId}:finished`),
+    async loadRun(tenantId, runId) {
+      const stored = await store.lookup(tenantId, 'runs', `${runId}:finished`);
+      if (stored === null) return null;
+      const run = z.object({ pipelineRunId: IdSchema, sourceId: IdSchema, artifacts: z.array(ArtifactSchema).max(1000) }).safeParse(stored);
+      if (!run.success || run.data.pipelineRunId !== runId) throw new L1Error('RUN_RECEIPT_INVALID', 'VERIFY');
+      const source = await store.resolveSource(tenantId, run.data.sourceId);
+      for (const artifact of run.data.artifacts) await store.artifact(source, artifact);
+      return stored;
+    },
     async loadReady(tenantId, envelopeId) {
       const envelope = await store.loadEnvelope(tenantId, envelopeId);
       if (envelope.processingStatus !== 'READY_FOR_POLICY_EVALUATION') throw new L1Error('ENVELOPE_NOT_READY', 'VERIFY');
@@ -63,7 +77,7 @@ export function createL1(options: L1Options): L1Runtime {
       } };
     },
   };
-  return {
+  const runtime: L1Runtime = {
     register: input => store.register(input), reader,
     async replay(tenantId, envelopeId) {
       const original = await store.loadEnvelope(tenantId, envelopeId);
@@ -91,7 +105,8 @@ export function createL1(options: L1Options): L1Runtime {
         envelopeIds: [replayed.envelopeId], status: 'COMPLETED', finishedAt: now(), artifacts: replayed.artifacts });
       return replayed;
     },
-    async process(input) {
+    async process(input) { return (await runtime.processWithReceipt(input)).envelopes; },
+    async processWithReceipt(input) {
       const bytes = await store.sourceBytes(input);
       const source = structuredClone(input), pipelineRunId = `run-${randomUUID()}`;
       const artifacts: ArtifactRef[] = [await store.retain(source, 'ORIGINAL', bytes)];
@@ -147,11 +162,12 @@ export function createL1(options: L1Options): L1Runtime {
       finally { await parser.close(); }
       for (const envelope of outputs) await store.saveEnvelope(envelope);
       await store.record(source.tenantId, 'runs', `${pipelineRunId}:finished`, { sourceId: source.sourceId, pipelineRunId, finishedAt: now(),
-        envelopeIds: outputs.map(e => e.envelopeId), sourceDisposition, artifacts,
+        sourceHashSha256: source.sourceHashSha256, envelopeIds: outputs.map(e => e.envelopeId), sourceDisposition, artifacts,
         status: outputs.some(e => e.processingStatus === 'PROCESSING_FAILED') ? 'FAILED' : 'COMPLETED' });
-      return outputs;
+      return { pipelineRunId, sourceDisposition, envelopes: outputs };
     },
   };
+  return runtime;
 }
 
 interface ReplaySnapshot {

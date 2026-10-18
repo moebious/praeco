@@ -1,6 +1,6 @@
 # L1 — Financial Evidence Intelligence
 
-**Status:** Accepted initial architecture and interface baseline. **Implementation not yet verified.**
+**Status:** Accepted initial architecture and interface baseline. Local runtime and synthetic integration tests are implemented; independent extraction accuracy and end-to-end financial behavior remain unverified.
 
 The current `contracts.ts`, runtime guide and executable acceptance fixtures define Praeco L1. Provider and human-validation limits are recorded in the [evaluation documentation](../evaluation/l1-acceptance.md).
 
@@ -36,6 +36,8 @@ TypeScript strict, Node.js, Hono, Zod, decimal.js and Vitest. LiteParse, LlamaPa
 ## Canonical contract
 
 [`packages/evidence-intelligence/src/contracts.ts`](../../packages/evidence-intelligence/src/contracts.ts) defines DocumentSource, DocumentSegment, EvidenceReference, ObservedField, InvoicePayload, FxRateSnapshot, FinancialNormalization, VerificationReport, InvoiceEnvelope and DocumentIntelligencePort. The technical `schemaVersion` discriminator is retained for wire compatibility; it is not a repository release number.
+
+External provider/object/revision provenance is additive integration metadata stored by `@praeco/external-document-intake`. It does not introduce ERP/Blinka channels or add fields to the canonical payload. See the [external document intake specification](external-document-intake.md).
 
 ## Validation required before claims of readiness
 

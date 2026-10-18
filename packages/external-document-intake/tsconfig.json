@@ -1,0 +1,9 @@
+{
+  "extends": "../evidence-intelligence/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "dist",
+    "paths": { "@praeco/evidence-intelligence": ["../evidence-intelligence/src/index.ts"] }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
