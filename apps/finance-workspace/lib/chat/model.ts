@@ -2,7 +2,7 @@ import "server-only"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import type { LanguageModelUsage, ModelMessage, ProviderMetadata } from "ai"
 import { z } from "zod"
-import { readChatConfiguration } from "@/lib/chat/config"
+import { readModelConfiguration } from "@/lib/chat/config"
 import {
   MAX_CONTEXT_BYTES, MAX_OUTPUT_TOKENS, nanosToUsd, usdToNanos, WorkspaceChatError,
   type UsageSummary,
@@ -51,7 +51,7 @@ export function estimatedCallCost(card: ModelCard, messages: ModelMessage[]): st
 }
 
 export function configuredModel() {
-  const configuration = readChatConfiguration()
+  const configuration = readModelConfiguration()
   return createOpenRouter({
     apiKey: configuration.OPENROUTER_API_KEY,
     baseURL: "https://openrouter.ai/api/v1",

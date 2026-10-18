@@ -25,7 +25,8 @@ export const chatIdInput = z.object({ chatId: z.uuid() }).strict()
 export const transcriptInput = chatIdInput.extend({
   before: z.string().min(1).max(200).optional(),
 }).strict()
-export const emptyClientData = z.object({}).strict()
+export const chatClientDataSchema = z.object({ bindingId: z.uuid() }).strict()
+export type ChatClientData = z.infer<typeof chatClientDataSchema>
 
 export interface UsageSummary {
   model: string

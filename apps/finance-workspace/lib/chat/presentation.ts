@@ -21,10 +21,44 @@ export function presentChatMessages(messages: readonly WorkspaceChatMessage[], s
       if ("toolCallId" in part && "state" in part) {
         const completed = part.state === "output-available"
         const failed = part.state === "output-error" || part.state === "output-denied"
+        const toolName = part.type.replace(/^tool-/, "")
+        const output = completed && "output" in part && typeof part.output === "object" && part.output !== null
+          ? (part.output as Record<string, unknown>)
+          : undefined
+
+        let summary = failed ? "Herramienta no completada" : completed ? "Completado" : "En ejecución…"
+        let status: "running" | "completed" | "review" | "error" = failed ? "error" : completed ? "completed" : "running"
+
+        if (completed && output) {
+          if (toolName === "inspect_workspace") {
+            summary = "Capacidades del workspace"
+          } else if (toolName === "list_payable_cases") {
+            const count = Array.isArray(output.cases) ? output.cases.length : 0
+            summary = `Catálogo de cuentas por pagar (${count} casos)`
+          } else if (toolName === "inspect_payable_case") {
+            summary = output.error ? `Inspección fallida: ${output.error}` : `Evidencia L1: ${output.caseId ?? "caso"}`
+          } else if (toolName === "evaluate_payable_policy") {
+            const outcome = typeof output.outcome === "string" ? output.outcome : "evaluado"
+            summary = `Evaluación L2: ${outcome}`
+            if (outcome === "PENDING_HUMAN_APPROVAL" || outcome === "BLOCKED") {
+              status = "review"
+            }
+          } else if (toolName === "authorize_payable") {
+            const outcome = typeof output.outcome === "string" ? output.outcome : "autorizado"
+            summary = `Autorización L2: ${outcome}`
+            if (outcome === "PENDING_HUMAN_APPROVAL" || outcome === "BLOCKED") {
+              status = "review"
+            }
+          } else if (toolName === "resolve_payable_approval") {
+            const outcome = typeof output.outcome === "string" ? output.outcome : "resuelto"
+            summary = `Resolución L2: ${outcome}`
+          }
+        }
+
         return [{
-          kind: "tool", id: String(part.toolCallId), name: part.type.replace(/^tool-/, ""),
-          summary: failed ? "Herramienta no completada" : completed ? "Consulta de solo lectura completada" : "Consultando capacidades…",
-          status: failed ? "error" : completed ? "completed" : "running",
+          kind: "tool", id: String(part.toolCallId), name: toolName,
+          summary,
+          status,
           detail: completed && "output" in part ? JSON.stringify(part.output, null, 2).slice(0, 4000) : undefined,
         }]
       }

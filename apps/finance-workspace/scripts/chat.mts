@@ -24,7 +24,7 @@ async function main() {
       model: card.id, promptUsdPerToken: card.pricing.prompt,
       completionUsdPerToken: card.pricing.completion,
       supportsTools: card.supported_parameters.includes("tools"),
-      triggerDevelopmentConfigured: true, paidCalls: 0,
+      triggerDevelopmentConfigured: true, catalogOnly: true,
     }))
     return
   }
@@ -38,30 +38,33 @@ async function main() {
   const store = createChatStore(db)
   const scope = { tenantId: `smoke:${randomUUID()}`, userId: `smoke:${randomUUID()}` }
   let id: string | undefined
-  let sessionCreated = false
+  let sessionId: string | undefined
   try {
     const rows = await metadata.initialize(scope)
     const conversation = rows.find((row) => row.specialistId === "vera")
     if (!conversation) throw new Error("CHAT_SMOKE_SETUP_FAILED")
     id = conversation.id
-    await store.authorize(scope, id, 3)
+    const lease = await store.authorize(scope, id, 3)
     const start = chat.createStartSessionAction(CHAT_TASK_ID, { tokenTTL: CHAT_TOKEN_TTL })
     const transport = new TriggerChatTransport({
       task: CHAT_TASK_ID,
       accessToken: async () => {
-        await store.authorize(scope, conversation.id, 3)
+        const refreshedLease = await store.authorize(scope, conversation.id, 3)
+        if (refreshedLease.bindingId !== lease.bindingId) throw new Error("CHAT_SMOKE_SETUP_FAILED")
         return auth.createPublicToken({
           scopes: { read: { sessions: conversation.id }, write: { sessions: conversation.id } },
           expirationTime: CHAT_TOKEN_TTL,
         })
       },
       startSession: async () => {
-        const result = await start({ chatId: conversation.id, clientData: {} })
-        sessionCreated = true
+        const result = await start({
+          chatId: conversation.id, clientData: { bindingId: lease.bindingId },
+        })
+        sessionId = result.sessionId
         await store.attachSession(conversation.id, result.sessionId)
         return result
       },
-      clientData: {},
+      clientData: { bindingId: lease.bindingId },
     })
     let toolResults = 0
     let textParts = 0
@@ -75,6 +78,7 @@ async function main() {
       }
       const stream = await transport.sendMessages({
         trigger: "submit-message", chatId: conversation.id,
+        messageId: undefined,
         messages: [{ id: randomUUID(), role: "user", parts: [{ type: "text", text }] }],
         abortSignal: AbortSignal.timeout(90_000),
       })
@@ -83,7 +87,11 @@ async function main() {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-          if (value.type === "error") throw new Error("CHAT_SMOKE_TURN_FAILED")
+          if (value.type === "error") {
+            const code = "errorText" in value ? value.errorText : ""
+            throw new Error(/^CHAT_[A-Z_]+$/.test(code)
+              ? `CHAT_SMOKE_${code}` : "CHAT_SMOKE_TURN_FAILED")
+          }
           if (value.type === "tool-output-available") toolResults++
           if (value.type === "text-delta" && value.delta.length > 0) textParts++
         }
@@ -109,9 +117,12 @@ async function main() {
         ({ model, provider, actualUsd, inputTokens, outputTokens })),
     }))
   } finally {
-    if (id && sessionCreated) await sessions.close(id)
-    await pool.end()
-    console.log("Synthetic Trigger session closed. Inference usage receipts retained in the isolated smoke scope.")
+    try {
+      if (sessionId) await sessions.close(sessionId)
+    } finally {
+      await pool.end()
+      console.log("Synthetic Trigger session closed. Inference usage receipts retained in the isolated smoke scope.")
+    }
   }
 }
 

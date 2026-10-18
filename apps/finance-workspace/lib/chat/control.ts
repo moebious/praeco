@@ -1,6 +1,7 @@
 import "server-only"
 import { auth as triggerAuth, configure } from "@trigger.dev/sdk"
 import { chat, defaultStorage } from "@trigger.dev/sdk/ai"
+import { z } from "zod"
 import { validateUIMessages } from "ai"
 import { getConversationStore } from "@/db/connection"
 import { getChatStore } from "@/db/chat-store"
@@ -24,11 +25,18 @@ async function ownedChat(input: unknown) {
 }
 
 export async function startOwnedChat(input: unknown) {
-  const { actor, chatId } = await ownedChat(input)
+  const inputSchema = chatIdInput.extend({ bindingId: z.uuid() }).strict()
+  const parsed = inputSchema.safeParse(input)
+  if (!parsed.success) {
+    await requireWorkspaceActor()
+    throw new WorkspaceChatError("CHAT_INPUT_INVALID")
+  }
+  const { actor, chatId } = await ownedChat({ chatId: parsed.data.chatId })
   try {
-    await getChatStore().authorize(actor, chatId)
+    const lease = await getChatStore().authorize(actor, chatId)
+    if (lease.bindingId !== parsed.data.bindingId) throw new WorkspaceChatError("CHAT_ACCESS_DENIED")
     const start = chat.createStartSessionAction(CHAT_TASK_ID, { tokenTTL: CHAT_TOKEN_TTL })
-    const session = await start({ chatId, clientData: {} })
+    const session = await start({ chatId, clientData: { bindingId: lease.bindingId } })
     await getChatStore().attachSession(chatId, session.sessionId)
     return session
   } catch (error) { throw safeChatError(error) }
@@ -67,13 +75,18 @@ export async function loadOwnedTranscript(input: unknown) {
 export async function bootstrapOwnedChat(input: unknown) {
   const { actor, chatId } = await ownedChat(input)
   try {
-    const sessionId = await getChatStore().session(actor, chatId)
-    if (!sessionId) return { messages: [] as WorkspaceChatMessage[], session: undefined, nextCursor: undefined }
+    const access = await getChatStore().authorize(actor, chatId)
+    const sessionId = access.sessionId
+    if (!sessionId) return {
+      bindingId: access.bindingId, messages: [] as WorkspaceChatMessage[],
+      session: undefined, nextCursor: undefined,
+    }
     const [history, token] = await Promise.all([
       loadOwnedTranscript({ chatId }), mintOwnedChatToken({ chatId }),
     ])
     return {
       messages: history.messages,
+      bindingId: access.bindingId,
       session: { publicAccessToken: token, lastEventId: "cursors" in history ? history.cursors?.lastOutEventId : undefined },
       nextCursor: "nextCursor" in history ? history.nextCursor : undefined,
     }
