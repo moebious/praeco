@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "preflight uses only local parsing; live may consume OpenRouter credits for exactly two synthetic invoices"
+        description: "preflight uses only local parsing; auth checks key without model calls; live may consume OpenRouter credits"
         required: true
         type: choice
-        options: [preflight, live]
+        options: [preflight, auth, live]
         default: preflight
 
 permissions:
@@ -38,6 +38,6 @@ jobs:
         run: python -m unittest discover -s scripts -p 'test_docjev_evaluation.py'
       - name: Run offline preflight or explicitly selected live experiment
         env:
-          TYPESAFE_API_KEY: ${{ inputs.mode == 'live' && secrets.OPENROUTER_API_KEY || '' }}
+          TYPESAFE_API_KEY: ${{ (inputs.mode == 'live' || inputs.mode == 'auth') && secrets.OPENROUTER_API_KEY || '' }}
         run: |
           python scripts/docjev-evaluation.py --docjev-root docjev-upstream --mode "${{ inputs.mode }}"
