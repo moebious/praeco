@@ -95,6 +95,7 @@ interface Assignment {
   runId?: string;
   l2DecisionId?: L2DecisionId;
   l2ApprovalRequestId?: string;
+  triggerWaitToken?: string;
 }
 interface Checkpoint {
   checkpointId: string;
@@ -120,13 +121,30 @@ interface AssignmentPort {
   advance(input: { assignmentId: string; expectedVersion: number; next: AssignmentState; outputRefs: readonly string[] }): Promise<Assignment>;
   get(assignmentId: string, principal: TrustedPrincipal): Promise<Assignment>;
 }
+interface IngestSourceResult {
+  pipelineRunId: string;
+  sourceDisposition: "INVOICE_OR_UNCERTAIN" | "SUPPLEMENTAL_CONTEXT";
+  envelopes: ReadonlyArray<{
+    envelopeId: L1EnvelopeId;
+    pipelineRunId: string;
+    processingStatus: "READY" | "AMBIGUOUS" | "REJECTED";
+  }>;
+}
 interface EvidencePort {
-  ingestSource(tenantId: string, sourceReference: string): Promise<readonly L1EnvelopeId[]>;
+  ingestSource(tenantId: string, sourceReference: string): Promise<IngestSourceResult>;
   loadReady(tenantId: string, envelopeId: L1EnvelopeId): Promise<unknown>;
 }
 interface FinancialDecisionPort {
-  decideAndCommit(input: { caseId: PayableCaseId; envelopeIds: readonly L1EnvelopeId[]; idempotencyKey: string }, principal: TrustedPrincipal): Promise<{ decisionId: L2DecisionId; outcome: "AUTHORIZED_SIMULATED" | "BLOCKED" | "PENDING_HUMAN_APPROVAL"; approvalRequestId?: string }>;
-  getDecision(tenantId: string, decisionId: L2DecisionId): Promise<unknown>;
+  decideAndCommit(
+    input: {
+      caseId: PayableCaseId;
+      envelopeIds: readonly L1EnvelopeId[];
+      idempotencyKey: string;
+      agentGrantRef: string;
+    },
+    principal: TrustedPrincipal
+  ): Promise<unknown>; // returns L2 FinancialDecisionRecord
+  getDecision(tenantId: string, decisionId: L2DecisionId): Promise<unknown | null>;
 }
 ```
 
@@ -151,11 +169,18 @@ For P0 use Postgres transactions with tenant-aware foreign keys and row/version 
 
 1. `ingestChannelEvent`: validate provider webhook, tenant installation and replay ID, authenticate/link user, insert inbound receipt + command/outbox in one transaction.
 2. `createOrLoadAssignment`: deduplicate by authenticated intent. A repeated inbound provider event returns the same assignment; a genuinely new command can deliberately create a new assignment referencing an existing case.
-3. `runAssignment` in Trigger: read current SQL state, advance with version guard, invoke **bounded** AI SDK tools for classification/explanation, call L1, attach persisted refs, checkpoint, call L2 through protected server-side port. Do not let a model author the trusted L1 reader return value or L2 principal context.
-4. `awaitReview`: when L2 is PENDING, record approval ID, suspend Trigger until a trusted L2 resolution event or periodic reconciliation. Waitpoint completion alone never grants finance authority.
+3. `runAssignment` in Trigger: read current SQL state, advance with version guard, invoke **bounded** AI SDK tools for classification/explanation, call L1, attach persisted refs, prefilter non-ready envelopes, checkpoint, call L2 through protected server-side port. Do not let a model author the trusted L1 reader return value or L2 principal context.
+4. `awaitReview`: when L2 returns `PENDING_HUMAN_APPROVAL`, persist the L2 approval request ID and the Trigger wait token (`triggerWaitToken`) on the `Assignment` record, and enter `WAITING_FOR_REVIEW`. Deliver notifications through outbox. The authenticated approver action is handled by L2; once L2 commits its decision, the web approval API completes the Trigger wait token synchronously. Trigger wait tokens are wake-up signals, not proof of finance authorization.
 5. `resumeAssignment`: read current L2 decision status, reread permissions, transition safely. Link and deliver channel updates.
 6. `replayAssignment`: read historical events/source/decision refs without side effects. A new financial decision is a separate explicit command.
 7. `notifyChannel`: redact, deduplicate by domain event + recipient + channel; delivery errors do not reverse financial state.
+
+## 5.1 The Reconciler (Durable scheduled recovery)
+
+A named **Reconciler** task runs as a Trigger.dev scheduled task (15–30s cadence, tenant-batched) owning three explicit recovery duties:
+1. **Outbox draining:** Drain undispatched outbox rows for L3 events and call trusted L2 outbox drain port if configured.
+2. **Approval observation:** Read L2 approval lifecycle state (derived expiry `createdAt + 24h` evaluated on read); for expired or resolved approvals, transition L3 assignments to `COMPLETED` and complete L3 waits. The Reconciler never writes or mutates L2 state directly.
+3. **Wait completion fallback:** Completes suspended Trigger waitpoints if the synchronous completion call by the web API failed or timed out.
 
 ## 6. Specialist boundaries
 

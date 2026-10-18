@@ -20,18 +20,25 @@ Eve and Pi Durable are **deferred alternative architectures**, not runtime depen
 - `ApprovalWait`: durable L3 observation of a *specific* L2 approval request; never a budget hold and never itself an approval.
 - `CommandReceipt`: stable idempotency identity and result ref scoped by tenant, command type, actor, Assignment and payload digest.
 
-Assignment lifecycle (P0): `QUEUED -> RUNNING -> WAITING_FOR_REVIEW -> RUNNING -> COMPLETED`, with transitions to `BLOCKED`, `FAILED_RECOVERABLE`, `FAILED_TERMINAL` and `CANCELLED` as applicable. **These are workflow states, not L2 financial verdicts.** A financial `BLOCKED` decision normally completes the investigation with a blocked financial outcome; it must not be confused with `FAILED_TERMINAL` infrastructure failure.
+Assignment lifecycle (P0): `QUEUED -> RUNNING -> WAITING_FOR_REVIEW -> RUNNING -> COMPLETED`, with transitions to `FAILED_RECOVERABLE`, `FAILED_TERMINAL` and `CANCELLED` as applicable. **These are workflow states, not L2 financial verdicts.** A financial `BLOCKED` decision completes the assignment investigation as `COMPLETED` referencing the immutable blocked decision record; it must not be confused with `FAILED_TERMINAL` infrastructure failure.
 
 ## Exclusive writer and reliable dispatch
 
 1. A trusted inbound API authenticates tenant/actor/channel principal mapping, checks permissions and validates a normalized command.
 2. Inside one SQL transaction, deduplicate `(tenantId, provider, providerEventId)` for received events; resolve/create the case; insert or load an `Assignment` and `CommandReceipt`; add an outbox event to start or resume its workflow.
-3. Dispatch to Trigger.dev asynchronously from the outbox, using stable idempotency keys and replayable parameters. Crash between commit and dispatch is recovered by draining the outbox. Trigger may redeliver: the domain-level command receipt prevents duplicate assignment or financial effects.
-4. The workflow state machine advances via compare-and-swap version transitions/unique write constraints. Task workers report outcomes and versioned event records. A retry must never overwrite a terminal state from a newer run.
-5. L3 calls trusted L1 through registered sources and identifiers; collects stored envelope references. An empty/supplemental L1 result is a distinct admissible *operational* disposition, not READY evidence.
-6. If a payable is eligible for L2, use stable per-intent L2 idempotency. L2 re-resolves trusted evidence and current financial context for `decideAndCommit`.
-7. On `PENDING_HUMAN_APPROVAL`, persist the L2 approval request ID and enter `WAITING_FOR_REVIEW`. Deliver notifications through outbox. The authenticated approver action is handled by L2, not fulfilled by a channel message; L3 later observes L2's resolution and resumes work. Trigger wait tokens are wake-up signals, not proof of finance authorization.
+3. Dispatch to Trigger.dev asynchronously from the outbox, using stable idempotency keys and replayable parameters. Crash between commit and dispatch is recovered by the Reconciler draining the outbox. Trigger may redeliver: the domain-level command receipt prevents duplicate assignment or financial effects.
+4. The workflow state machine advances via compare-and-swap version transitions/unique write constraints. Task workers report outcomes and versioned event records. A retry must never overwrite a terminal state from a newer run. Queue concurrency is 1 per assignment.
+5. L3 calls trusted L1 through registered sources and identifiers; collects stored envelope references. An empty/supplemental L1 result is a distinct admissible *operational* disposition, not READY evidence. L3 prefilters non-ready envelopes and never submits them to L2.
+6. If a payable is eligible for L2, use stable per-intent L2 idempotency (`sha256(tenantId + ":" + canonicalPayableKey + ":" + intentDigestSha256)`). L2 re-resolves trusted evidence and current financial context for `decideAndCommit`.
+7. On `PENDING_HUMAN_APPROVAL`, persist the L2 approval request ID and the Trigger wait token (`triggerWaitToken`) on the `Assignment` record and enter `WAITING_FOR_REVIEW`. Deliver notifications through outbox. The authenticated approver action is handled by L2; once L2 commits its decision, the web approval API completes the Trigger wait token synchronously. Trigger wait tokens are wake-up signals, not proof of finance authorization.
 8. On financial decision, persist the immutable L2 decision reference and emit a response event. A crash during delivery replays the notification without rerunning `decideAndCommit`.
+
+## The Reconciler
+
+A named **Reconciler** running as a Trigger.dev scheduled task (15–30s cadence, tenant-batched) owns three explicit recovery duties:
+1. **Outbox draining:** Drain undispatched outbox rows (L3 outbox, and calls trusted L2 outbox export/drain port if configured).
+2. **Approval observation:** Read L2 approval lifecycle state (derived expiry `createdAt + 24h` evaluated on read); for expired or resolved approvals, transition L3 assignments to `COMPLETED` and complete L3 waits. The Reconciler never writes or mutates L2 state directly.
+3. **Wait completion fallback:** Completes suspended Trigger waitpoints if the synchronous completion call by the web API failed or timed out.
 
 Do not use multiple independent Trigger workflows or AI agent sessions as competing owners of a single Assignment; child tasks need explicit delegation and a clear parent ownership model.
 
