@@ -10,7 +10,9 @@ import type {
   TrustedFinancialContext,
 } from './types.js';
 import type { TransactionalFinancialStore } from './store.js';
-import type { AuthoritativeCommitPort } from './commit-port.js';
+import type {
+  AuthoritativeCommitPort, AuthoritativeCommandLookup, AuthoritativeCommandResult,
+} from './commit-port.js';
 import { evaluatePayable } from './kernel.js';
 import { canonicalJson, digest } from './hashing.js';
 import { decimal, toUsdExact } from './decimal.js';
@@ -64,6 +66,13 @@ export class FinancialAuthorizationService {
     return this.store.withTransaction(async () => {
       // 1. Idempotency verification (ADR-003)
       const payloadDigest = digest(canonicalJson(command));
+      // Reading a committed outcome is not a new financial action. Recover
+      // before evidence/context evaluation, even if local non-commit state
+      // was cached before another process committed the command.
+      const recovered = await this.recoverCommittedCommand({
+        tenantId: actor.tenantId, idempotencyKey: command.idempotencyKey, payloadDigest,
+      }, null);
+      if (recovered) return recovered;
       const existingReceipt = this.store.receipts.get(command.idempotencyKey);
       if (existingReceipt) {
         if (existingReceipt.payloadDigest !== payloadDigest) {
@@ -136,30 +145,13 @@ export class FinancialAuthorizationService {
             occurredAt,
           });
 
-          this.syncBudgetMirror(budget, portResult.budgetCommittedUsd);
-
           if (portResult.status === 'IDEMPOTENT_REPLAY') {
-            const replayed = portResult.decisionRecord;
-            this.mirrorAuthorizedCommit({
-              canonicalKey,
-              intentDigestSha256: replayed.intentDigestSha256,
-              amountUsd: unroundedUsd.toString(),
-              commitmentId: replayed.commitmentId ?? commitmentId,
-              budgetId: budget?.budgetId ?? 'UNKNOWN',
-              decisionId: replayed.decisionId,
-              tenantId: actor.tenantId,
-              occurredAt,
-            });
-            this.store.receipts.set(command.idempotencyKey, {
-              tenantId: actor.tenantId,
-              idempotencyKey: command.idempotencyKey,
-              payloadDigest,
-              decisionId: replayed.decisionId,
-              recordedAt: occurredAt,
-            });
-            this.store.decisions.set(replayed.decisionId, replayed);
-            return replayed;
+            return this.mirrorRecoveredCommand({
+              tenantId: actor.tenantId, idempotencyKey: command.idempotencyKey, payloadDigest,
+            }, portResult, null);
           }
+
+          this.syncBudgetMirror(budget, portResult.budgetCommittedUsd);
 
           if (
             portResult.status === 'DUPLICATE_OBLIGATION' ||
@@ -325,6 +317,21 @@ export class FinancialAuthorizationService {
     return this.store.withTransaction(async () => {
       // 1. Idempotency check
       const payloadDigest = digest(canonicalJson(command));
+      const localRequest = this.store.approvalRequests.get(command.approvalRequestId);
+      if (localRequest && localRequest.tenantId !== actor.tenantId) {
+        throw new Error('APPROVAL_TENANT_MISMATCH: approval request belongs to a different tenant');
+      }
+      const recovered = await this.recoverCommittedCommand({
+        tenantId: actor.tenantId, idempotencyKey: command.idempotencyKey, payloadDigest,
+      }, command.approvalRequestId);
+      if (recovered) {
+        if (localRequest) {
+          localRequest.status = 'APPROVED';
+          localRequest.resolvedAt = recovered.occurredAt;
+          localRequest.resolvedDecisionId = recovered.decisionId;
+        }
+        return recovered;
+      }
       const existingReceipt = this.store.receipts.get(command.idempotencyKey);
       if (existingReceipt) {
         if (existingReceipt.payloadDigest !== payloadDigest) {
@@ -492,7 +499,9 @@ export class FinancialAuthorizationService {
           occurredAt: currentTime,
         });
 
-        this.syncBudgetMirror(budget, portResult.budgetCommittedUsd);
+        if (portResult.status !== 'IDEMPOTENT_REPLAY') {
+          this.syncBudgetMirror(budget, portResult.budgetCommittedUsd);
+        }
 
         if (
           portResult.status === 'DUPLICATE_OBLIGATION' ||
@@ -547,29 +556,12 @@ export class FinancialAuthorizationService {
         }
 
         if (portResult.status === 'IDEMPOTENT_REPLAY') {
-          const replayed = portResult.decisionRecord;
-          this.mirrorAuthorizedCommit({
-            canonicalKey: request.canonicalPayableKey,
-            intentDigestSha256: replayed.intentDigestSha256,
-            amountUsd: unroundedUsd.toString(),
-            commitmentId: replayed.commitmentId ?? commitmentId,
-            budgetId: budget.budgetId,
-            decisionId: replayed.decisionId,
-            tenantId: actor.tenantId,
-            occurredAt: currentTime,
-          });
-          this.store.receipts.set(command.idempotencyKey, {
-            tenantId: actor.tenantId,
-            idempotencyKey: command.idempotencyKey,
-            payloadDigest,
-            decisionId: replayed.decisionId,
-            recordedAt: currentTime,
-          });
+          const replayed = this.mirrorRecoveredCommand({
+            tenantId: actor.tenantId, idempotencyKey: command.idempotencyKey, payloadDigest,
+          }, portResult, command.approvalRequestId);
           request.status = 'APPROVED';
-          request.resolvedAt = currentTime;
-          request.resolvedByPrincipalId = actor.principalId;
+          request.resolvedAt = replayed.occurredAt;
           request.resolvedDecisionId = replayed.decisionId;
-          this.store.decisions.set(replayed.decisionId, replayed);
           return replayed;
         }
 
@@ -684,6 +676,48 @@ export class FinancialAuthorizationService {
     });
   }
 
+  private async recoverCommittedCommand(
+    query: AuthoritativeCommandLookup,
+    approvalRequestId: string | null
+  ): Promise<FinancialDecisionRecord | null> {
+    if (!this.commitPort) return null;
+    const result = await this.commitPort.lookupCommandResult(query);
+    if (!result) return null;
+    return this.mirrorRecoveredCommand(query, result, approvalRequestId);
+  }
+
+  private mirrorRecoveredCommand(
+    query: AuthoritativeCommandLookup,
+    result: AuthoritativeCommandResult,
+    approvalRequestId: string | null
+  ): FinancialDecisionRecord {
+    const record = result.decisionRecord;
+    if (
+      record.tenantId !== query.tenantId || record.outcome !== 'AUTHORIZED_SIMULATED' ||
+      !record.commitmentId || record.approvalRequestId !== approvalRequestId
+    ) {
+      throw new Error('IDEMPOTENT_DECISION_RECORD_INVALID');
+    }
+    const budget = Array.from(this.store.budgets.values()).find(b => b.budgetId === result.budgetId);
+    this.syncBudgetMirror(budget, result.budgetCommittedUsd);
+    this.mirrorAuthorizedCommit({
+      canonicalKey: result.canonicalKey,
+      intentDigestSha256: record.intentDigestSha256,
+      amountUsd: result.amountUsd,
+      commitmentId: record.commitmentId,
+      budgetId: result.budgetId,
+      decisionId: record.decisionId,
+      tenantId: record.tenantId,
+      occurredAt: record.occurredAt,
+    });
+    this.store.decisions.set(record.decisionId, record);
+    this.store.receipts.set(query.idempotencyKey, {
+      ...query, decisionId: record.decisionId,
+      recordedAt: record.occurredAt, recoveredAt: this.now(),
+    });
+    return record;
+  }
+
   /** Syncs the in-memory budget mirror to the authoritative committed total. */
   private syncBudgetMirror(budget: BudgetDirectoryEntry | undefined, committedUsd: string | null): void {
     if (budget && committedUsd !== null) {
@@ -702,8 +736,9 @@ export class FinancialAuthorizationService {
     tenantId: string;
     occurredAt: string;
   }): void {
+    const alreadyMirrored = this.store.commitments.has(input.commitmentId);
     this.store.obligations.set(input.canonicalKey, {
-      obligationId: `ob-${randomUUID()}`,
+      obligationId: this.store.obligations.get(input.canonicalKey)?.obligationId ?? `ob-${randomUUID()}`,
       tenantId: input.tenantId,
       canonicalKey: input.canonicalKey,
       intentDigestSha256: input.intentDigestSha256,
@@ -720,13 +755,15 @@ export class FinancialAuthorizationService {
       decisionId: input.decisionId,
       committedAt: input.occurredAt,
     });
-    this.store.ledgerEvents.push({
-      eventId: `evt-${randomUUID()}`,
-      tenantId: input.tenantId,
-      eventType: 'SIMULATED_AUTHORIZATION_COMMITTED',
-      payload: { decisionId: input.decisionId, canonicalKey: input.canonicalKey, unroundedUsd: input.amountUsd },
-      occurredAt: input.occurredAt,
-    });
+    if (!alreadyMirrored) {
+      this.store.ledgerEvents.push({
+        eventId: `evt-${randomUUID()}`,
+        tenantId: input.tenantId,
+        eventType: 'SIMULATED_AUTHORIZATION_COMMITTED',
+        payload: { decisionId: input.decisionId, canonicalKey: input.canonicalKey, unroundedUsd: input.amountUsd },
+        occurredAt: input.occurredAt,
+      });
+    }
   }
 
   /** Records the duplicate race loser and its idempotency receipt. */

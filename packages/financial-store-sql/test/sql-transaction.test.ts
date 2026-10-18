@@ -132,6 +132,39 @@ describe.skipIf(!databaseUrl)('SQL financial store — ADR-003 transaction bound
     expect(await store.getCommittedUsd(tenant, 'BUDGET-2026-10')).toBe('2200.00');
   });
 
+  it('reads durable command outcomes with tenant scoping and payload validation', async () => {
+    const tenant = makeTenant();
+    await seedBudget(tenant, '5000.00');
+    const command = makeCommand(tenant);
+    expect(await store.getCommandResult(tenant, command.idempotencyKey, command.payloadDigest)).toBeNull();
+    await store.commitPayable(command);
+    const result = await store.getCommandResult(tenant, command.idempotencyKey, command.payloadDigest);
+    expect(result).toMatchObject({
+      decisionId: command.decisionId,
+      commitmentId: command.commitmentId,
+      canonicalKey: command.canonicalKey,
+      amountUsd: '2200.00',
+      budgetId: command.budgetId,
+      budgetCommittedUsd: '2200.00',
+      decisionRecord: command.decisionRecord,
+    });
+    expect(await store.getCommandResult(makeTenant(), command.idempotencyKey, command.payloadDigest)).toBeNull();
+    await expect(store.getCommandResult(tenant, command.idempotencyKey, 'c'.repeat(64)))
+      .rejects.toThrow('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH');
+    expect(await store.getCommittedUsd(tenant, command.budgetId)).toBe('2200.00');
+  });
+
+  it('fails closed on an incomplete durable outcome instead of returning an unrecorded command', async () => {
+    const tenant = makeTenant();
+    await seedBudget(tenant, '5000.00');
+    // Model a corrupted historical JSON snapshot using this storage-only API.
+    const command = makeCommand(tenant, { decisionRecord: null });
+    await store.commitPayable(command);
+    await expect(store.getCommandResult(tenant, command.idempotencyKey, command.payloadDigest))
+      .rejects.toThrow('DURABLE_COMMAND_RESULT_INCOMPLETE');
+    expect(await store.getCommittedUsd(tenant, command.budgetId)).toBe('2200.00');
+  });
+
   it('serializes concurrent retries with the same idempotency key as one commit and one replay', async () => {
     const tenant = makeTenant();
     await seedBudget(tenant, '5000.00');

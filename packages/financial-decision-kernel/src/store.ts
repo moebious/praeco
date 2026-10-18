@@ -37,6 +37,8 @@ export interface CommandReceiptRecord {
   payloadDigest: string;
   decisionId: string;
   recordedAt: string;
+  /** Process-local recovery time, never substituted for historical timestamps. */
+  recoveredAt?: string;
 }
 
 export interface CommitmentRecord {

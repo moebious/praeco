@@ -2,10 +2,10 @@ name: L2 and L3 SQL stores
 
 on:
   pull_request:
-    paths: ['packages/financial-store-sql/**', 'packages/agent-harness/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
+    paths: ['packages/financial-store-sql/**', 'packages/financial-decision-kernel/**', 'packages/agent-harness/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
   push:
     branches: [main]
-    paths: ['packages/financial-store-sql/**', 'packages/agent-harness/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
+    paths: ['packages/financial-store-sql/**', 'packages/financial-decision-kernel/**', 'packages/agent-harness/**', 'package.json', 'package-lock.json', '.github/workflows/l2-sql-store.yml']
 
 permissions:
   contents: read

@@ -56,7 +56,8 @@ function uniquePayableScenario(scenario: ScenarioDef): ScenarioDef {
 function serviceFor(
   scenario: ScenarioDef,
   store: SqlFinancialStore,
-  budgetSuffix: string
+  budgetSuffix: string,
+  options: { now?: () => string; extraEnvelopes?: readonly ReadyInvoiceEnvelope[] } = {}
 ): ServiceType {
   const scenarioStore = createScenarioStore(scenario.id);
   const budget = Array.from(scenarioStore.budgets.values()).find(b => b.period === '2026-10');
@@ -65,7 +66,8 @@ function serviceFor(
   }
   const resolver = new TestResolver();
   resolver.register(scenario.envelope);
-  return new FinancialAuthorizationService(scenarioStore, resolver, undefined, new SqlCommitPort(store));
+  for (const envelope of options.extraEnvelopes ?? []) resolver.register(envelope);
+  return new FinancialAuthorizationService(scenarioStore, resolver, options.now, new SqlCommitPort(store));
 }
 
 async function seedScenarioBudget(
@@ -145,7 +147,9 @@ describe.skipIf(!databaseUrl)('kernel commit paths over the authoritative SQL ba
     const budgetId = await seedScenarioBudget(sqlStore, scenario, budgetSuffix, '5000.00');
     const idempotencyKey = `idem-replay-${randomUUID()}`;
 
-    const first = serviceFor(scenario, sqlStore, budgetSuffix);
+    const committedAt = '2026-10-18T10:00:00.000Z';
+    const recoveredAt = '2026-10-18T11:00:00.000Z';
+    const first = serviceFor(scenario, sqlStore, budgetSuffix, { now: () => committedAt });
     const command = {
       proposal: { payableCaseId: 'case-replay', envelopeIds: [scenario.envelope.envelopeId] },
       idempotencyKey,
@@ -157,7 +161,7 @@ describe.skipIf(!databaseUrl)('kernel commit paths over the authoritative SQL ba
 
     // A second service with a cold in-memory store replays from the
     // authoritative backend without a second debit.
-    const second = serviceFor(scenario, sqlStore, budgetSuffix);
+    const second = serviceFor(scenario, sqlStore, budgetSuffix, { now: () => recoveredAt });
     const replayed = await second.decideAndCommit(command, workerActor);
     expect(replayed.decisionId).toBe(committed.decisionId);
     expect(replayed.outcome).toBe('AUTHORIZED_SIMULATED');
@@ -165,6 +169,36 @@ describe.skipIf(!databaseUrl)('kernel commit paths over the authoritative SQL ba
     // The replay is mirrored into the cold service's read paths.
     expect(second.store.decisions.get(committed.decisionId)?.outcome).toBe('AUTHORIZED_SIMULATED');
     expect(second.store.receipts.get(idempotencyKey)?.decisionId).toBe(committed.decisionId);
+    expect(second.store.commitments.get(committed.commitmentId!)?.committedAt).toBe(committedAt);
+    expect([...second.store.obligations.values()][0]?.authorizedAt).toBe(committedAt);
+    expect(second.store.receipts.get(idempotencyKey)).toMatchObject({
+      recordedAt: committedAt, recoveredAt,
+    });
+  });
+
+  it('returns the original committed outcome when retry-time budget gates would now block', async () => {
+    const a = uniquePayableScenario(buildScenarios()[0]!);
+    const b = uniquePayableScenario(buildScenarios()[0]!);
+    a.envelope.envelopeId = `env-a-${randomUUID()}`;
+    b.envelope.envelopeId = `env-b-${randomUUID()}`;
+    const suffix = `RECOVERY-${randomUUID()}`;
+    const budgetId = await seedScenarioBudget(sqlStore, a, suffix, '5000.00');
+    const command = (scenario: ScenarioDef) => ({
+      proposal: { payableCaseId: `case-${scenario.envelope.envelopeId}`, envelopeIds: [scenario.envelope.envelopeId] },
+      idempotencyKey: `idem-${scenario.envelope.envelopeId}`,
+      workerId: 'worker-agent-demo',
+      agentGrantRef: 'grant-synthetic-worker',
+    });
+    const first = serviceFor(a, sqlStore, suffix);
+    const original = await first.decideAndCommit(command(a), workerActor);
+    const second = serviceFor(b, sqlStore, suffix, { extraEnvelopes: [a.envelope] });
+    expect((await second.decideAndCommit(command(b), workerActor)).outcome).toBe('AUTHORIZED_SIMULATED');
+    expect([...second.store.budgets.values()][0]?.committedUsd).toBe('4400.00');
+    expect(await second.decideAndCommit(command(a), workerActor)).toEqual(original);
+    expect(await second.decideAndCommit(command(a), workerActor)).toEqual(original);
+    expect(await sqlStore.getCommittedUsd(DEMO_TENANT_ID, budgetId)).toBe('4400.00');
+    expect(second.store.receipts.get(command(a).idempotencyKey)?.decisionId).toBe(original.decisionId);
+    expect(second.store.ledgerEvents).toHaveLength(2);
   });
 
   it('blocks a payable the authoritative backend rejects for concurrent budget exhaustion', async () => {
@@ -213,7 +247,9 @@ describe.skipIf(!databaseUrl)('kernel commit paths over the authoritative SQL ba
     const budgetSuffix = `APPR-${randomUUID()}`;
     const budgetId = await seedScenarioBudget(sqlStore, scenario, budgetSuffix, '4500.00');
 
-    const service = serviceFor(scenario, sqlStore, budgetSuffix);
+    const committedAt = '2026-10-18T10:00:00.000Z';
+    const recoveredAt = '2026-10-18T11:00:00.000Z';
+    const service = serviceFor(scenario, sqlStore, budgetSuffix, { now: () => committedAt });
     const pending = await service.decideAndCommit(
       {
         proposal: { payableCaseId: 'case-appr', envelopeIds: [scenario.envelope.envelopeId] },
@@ -225,17 +261,23 @@ describe.skipIf(!databaseUrl)('kernel commit paths over the authoritative SQL ba
     );
     expect(pending.outcome).toBe('PENDING_HUMAN_APPROVAL');
 
-    const approved = await service.resolveApproval(
-      {
-        approvalRequestId: pending.approvalRequestId!,
-        idempotencyKey: `idem-appr-resolve-${randomUUID()}`,
-        action: 'APPROVE',
-      },
-      cfoActor
-    );
+    const request = structuredClone(service.store.approvalRequests.get(pending.approvalRequestId!)!);
+    const resolution = {
+      approvalRequestId: pending.approvalRequestId!,
+      idempotencyKey: `idem-appr-resolve-${randomUUID()}`,
+      action: 'APPROVE' as const,
+    };
+    const approved = await service.resolveApproval(resolution, cfoActor);
     expect(approved.outcome).toBe('AUTHORIZED_SIMULATED');
     expect(approved.commitmentId).not.toBeNull();
     expect(await sqlStore.getCommittedUsd(DEMO_TENANT_ID, budgetId)).toBe('3800.00');
+    const fresh = serviceFor(scenario, sqlStore, budgetSuffix, { now: () => recoveredAt });
+    fresh.store.approvalRequests.set(request.approvalRequestId, request);
+    fresh.store.grants.clear();
+    expect(await fresh.resolveApproval(resolution, cfoActor)).toEqual(approved);
+    expect(request.resolvedAt).toBe(committedAt);
+    expect(fresh.store.commitments.get(approved.commitmentId!)?.committedAt).toBe(committedAt);
+    expect([...fresh.store.obligations.values()][0]?.authorizedAt).toBe(committedAt);
   });
 
   it('rejects payload drift on a reused idempotency key at the authoritative boundary', async () => {
