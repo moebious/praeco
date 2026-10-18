@@ -117,6 +117,28 @@ describe('Layer 3 Slice B — Durable Workflow & Specialist Roles', () => {
       expect(store.financialDecisions.size).toBe(0);
       expect(store.financialIntents.size).toBe(0);
     });
+
+    it('fails closed when the envelope does not match any scenario', async () => {
+      const context = {
+        principal: PRINCIPAL,
+        assignmentId: 'asgn-mock',
+        workerPrincipalId: 'worker-kael',
+        workerVersionId: 'v1.0.0',
+        runId: 'run-01',
+        ownershipEpoch: 1,
+      };
+
+      // An unknown envelope must error instead of silently evaluating an
+      // unrelated synthetic invoice.
+      await expect(
+        registry.executeTool(
+          'explain_policy_evaluation',
+          'KAEL',
+          { envelopeId: 'env-does-not-exist' },
+          context
+        )
+      ).rejects.toThrow('SCENARIO_NOT_FOUND');
+    });
   });
 
   describe('Bounded Execution & Resource Deadlines', () => {

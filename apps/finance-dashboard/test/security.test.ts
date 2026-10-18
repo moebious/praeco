@@ -62,6 +62,17 @@ describe('finance-dashboard admin endpoint security', () => {
     expect(((await allowed.json()) as { ok: boolean }).ok).toBe(true);
   });
 
+  it('rejects run-all without the token and accepts it with the token', async () => {
+    const denied = await post('/api/run-all', {});
+    expect(denied.status).toBe(403);
+    expect(((await denied.json()) as { error: string }).error).toContain('DASHBOARD_TOKEN_REQUIRED');
+
+    const allowed = await post('/api/run-all', {}, DASHBOARD_TOKEN);
+    expect(allowed.status).toBe(200);
+    const body = (await allowed.json()) as { decisions: unknown[]; spentUsd: string };
+    expect(body.decisions).toHaveLength(8);
+  });
+
   it('rejects approve and reject without the dashboard token', async () => {
     const approve = await post('/api/approve', { approvalRequestId: 'x', scenarioId: 'BLINKA-03' });
     expect(approve.status).toBe(403);

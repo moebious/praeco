@@ -62,9 +62,16 @@ export function createKaelTools(_options: KaelToolsOptions): SpecialistToolDefin
     }),
     async execute(params, context) {
       const scenarios = buildScenarios();
-      const targetScenario = (params.scenarioId
+      const targetScenario = params.scenarioId
         ? scenarios.find((s) => s.id === params.scenarioId)
-        : scenarios.find((s) => s.envelope.envelopeId === params.envelopeId)) ?? scenarios[0]!;
+        : scenarios.find((s) => s.envelope.envelopeId === params.envelopeId);
+      // Fail closed: never fall back to an unrelated synthetic invoice when the
+      // requested scenario or envelope does not exist.
+      if (!targetScenario) {
+        throw new Error(
+          `SCENARIO_NOT_FOUND: no synthetic scenario matches ${params.scenarioId ?? params.envelopeId}`
+        );
+      }
 
       const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
       const store = createScenarioStore(scenarioId);

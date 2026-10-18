@@ -156,9 +156,16 @@ export function createNovaTools(options: NovaToolsOptions): SpecialistToolDefini
 
       // 3. Resolve scenario context or active L2 service
       const scenarios = buildScenarios();
-      const targetScenario = (params.scenarioId
+      const targetScenario = params.scenarioId
         ? scenarios.find((s) => s.id === params.scenarioId)
-        : scenarios.find((s) => s.envelope.envelopeId === intent.envelopeIds[0])) ?? scenarios[0]!;
+        : scenarios.find((s) => s.envelope.envelopeId === intent.envelopeIds[0]);
+      // Fail closed: never fall back to an unrelated synthetic invoice when the
+      // referenced scenario or envelope does not exist.
+      if (!targetScenario) {
+        throw new Error(
+          `SCENARIO_NOT_FOUND: no synthetic scenario matches ${params.scenarioId ?? intent.envelopeIds[0]}`
+        );
+      }
 
       const scenarioId = (params.scenarioId ?? targetScenario.id) as ScenarioId;
       const scenarioStore = createScenarioStore(scenarioId);
