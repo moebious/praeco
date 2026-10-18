@@ -1,10 +1,12 @@
 # Praeco — Solution Architecture: Governed Financial AI Teammates
 
-**Status:** Proposed / Under Review (architecture baseline for discussion, NOT an accepted ADR)
+**Status:** Historical design reference; L3 ownership/runtime and L2 financial defaults superseded by ADR-002–006 and the L3 implementation contract. Not an accepted ADR.
 **Date:** 2026-10-17
 **Product:** Praeco — 30X Hackathon / Blinka Accounts Payable challenge
 **Source of product direction:** Founder design vision for AI Teammates + delegated Agent Wallets
-**Companion docs:** [L2 kernel](financial-decision-kernel.md) · [Wallets](agent-wallets.md) · [L1 architecture](evidence-intelligence.md) · [ADR-001](../adr/001-evidence-boundaries.md)
+**Current normative proposals:** [ADR-004](../adr/004-domain-specific-agent-harness.md), [ADR-005](../adr/005-durable-assignment-execution.md), [ADR-006](../adr/006-multichannel-identity-and-messaging.md), [L3 implementation contract](l3-implementation-contract.md). **Authoritative financial baseline:** [ADR-002](../adr/002-deterministic-financial-authorization.md) and [ADR-003](../adr/003-governed-wallets-transactional-ledger.md). Original reference: [ADR-001](../adr/001-evidence-boundaries.md).
+
+> **Architecture reconciliation (2026-10-17):** The diagrams below illustrate the initial AI-teammates concept, not the final L3 implementation dependency graph. P0 uses **Trigger.dev (exclusive Assignment workflow owner) + Vercel AI SDK (bounded tools/model) + Chat SDK/direct adapters (channel transport)**. Eve/Pi Durable are deferred alternatives. A single Praeco tenant-bound agent identity uses Vera/Kael/Nova as capability profiles by default. ADR-003 resolves pending holds: **none in P0**. ADR-002/003 resolve financial policy and budget gates. Do not implement stale open choices or the older Trigger/AI roles as conflicting authorities. See the L3 implementation contract for the current normative proposal.
 
 ## 1. Product thesis
 
@@ -99,7 +101,7 @@ sequenceDiagram
     T-->>UI: Explain decision and show wallet/audit state
 ~~~
 
-The exact persistence behavior for pending approvals is **undecided**; a workflow wait is not a financial hold. L2 must not treat an earlier preview or human click as a substitute for a current transactionally valid decision.
+Per ADR-003, **pending approval does not reserve budget in P0**; a workflow wait is not a financial hold. L2 must not treat an earlier preview or human click as a substitute for a current transactionally valid decision.
 
 ## 5. Data and domain separations
 
@@ -119,8 +121,8 @@ Operational agent memory and search indexes may suggest relevant context; only t
 | Concern | Direction | State |
 | --- | --- | --- |
 | UI | Next.js 16 / React 19 / TypeScript, shadcn/ui Nova (Base UI), AI Elements, resizable panels and DiceBear | Preferred UI reference |
-| Chat / models | Vercel AI SDK; provider or AI Gateway | Preferred |
-| Durable execution | Trigger.dev; suspend/retry with safe idempotent boundaries | Preferred |
+| Chat / models | Vercel AI SDK for bounded model/tool loops; Vercel Chat SDK / native adapters for channel transport | P0 design decision; adapter versions require proof |
+| Durable execution | Trigger.dev; exclusive owner of P0 financial Assignment workflows | P0 design decision in ADR-005 |
 | Data | Neon PostgreSQL + Drizzle for financial transactions and operational records | Preferred |
 | Human identity | Clerk Auth (distinct from financial approvals) | Preferred |
 | Sandboxed work | Daytona with optional noVNC; only for jobs that need a cloud computer | Optional |
@@ -156,8 +158,8 @@ The Antonio repository's AI usage ledger meters model tokens and sandbox time; i
 
 ## 9. Open decisions and review checklist
 
-1. Choose wallet allocation/period/hold model, approval authority and expiration.
-2. Specify business payable identity, contract tolerance semantics and ledger transaction isolation.
+1. **Resolved by ADR-002/003:** USD corporate period budget, no pending holds, FinanceAdmin consent, payable identity, configured tolerance and SQL transaction protection.
+2. **Do not reopen during L3 implementation:** financial authorization semantics remain solely in L2.
 3. Define exact L1-to-L3 case correlation and trusted L1-to-L2 reader.
 4. Confirm platform credentials, data isolation, migrations, cost/limits and demo deployment.
 5. Validate reference repo/design licensing before copying substantial files or artwork.
