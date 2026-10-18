@@ -25,6 +25,10 @@ The second run parsed all three inputs, including the PNG. Extract still returne
 
 The corrected run used **24 credits**. The initial run used **50 credits** for two Extract jobs; the PNG request was rejected before billing. Total observed usage was **74 credits**, equivalent to **US$0.0925** at the published rate of US$1.25 per 1,000 credits. This was drawn from the free credit allowance; no direct payment was made.
 
+## Recheck after adapter updates
+
+A third run on October 18 UTC again processed the three synthetic inputs for **24 credits** (3 Parse + 5 Extract per input). None matched the fixture's expected invoice fields. All remained `REVIEW_REQUIRED`; both PDFs additionally had no observed currency, so normalization was unavailable. Every result included `UNCITED_PROVIDER_VALUE` and `CRITICAL_OR_CONFLICTING_FIELD`; the scan also included `OCR_FIDELITY_UNVERIFIED`. The smoke command correctly exited nonzero because expected fields and PDF dispositions did not match.
+
 ## Decision
 
 LlamaParse is provisioned and processed the three synthetic inputs at the cost-effective tier. LlamaExtract is **not validated for Praeco readiness**: all its fields must remain candidates for human review until its citations can be grounded against source text. Do not weaken the verifier or treat confidence scores as evidence. For the hackathon demo, use Praeco's deterministic synthetic extractor for the labelled fixture corpus and show hosted results as pending review.
