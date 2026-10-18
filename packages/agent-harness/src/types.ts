@@ -234,7 +234,7 @@ export interface AssignmentPort {
   createOrLoad(
     input: InboundMessageCommand,
     principal: TrustedPrincipal,
-    options?: { signal?: AbortSignal }
+    options?: { sourceLinks?: readonly CaseSourceLink[]; signal?: AbortSignal }
   ): Promise<{ assignment: Assignment; isDuplicate: boolean }>;
 
   claimRun(

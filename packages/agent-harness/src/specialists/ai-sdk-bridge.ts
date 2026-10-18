@@ -1,3 +1,4 @@
+import { tool as sdkTool, type Tool, type ToolExecutionOptions } from 'ai';
 import type { z } from 'zod';
 import { HarnessError } from '../state-machine.js';
 import type {
@@ -13,52 +14,73 @@ import type {
 import { DEFAULT_SPECIALIST_LIMITS } from './types.js';
 
 /**
- * Compatible representation of a Vercel AI SDK tool definition.
- * Matches Vercel AI SDK (ai v5/v6/v7) CoreTool / tool() interface.
+ * Executable tools for the pinned AI SDK v6 contract (ai@6.0.303), built through
+ * the SDK's own `tool()` helper so an adapted map is a valid `ToolSet` both
+ * statically and at runtime. `parameters` is retained as an extra v5-style
+ * alias key; the pinned v6 SDK reads `inputSchema` and ignores it.
+ * Compatibility is proven against the pinned version only (offline
+ * mock-model test), not every SDK major.
  */
-export interface AiSdkTool<TParams = any, TResult = any> {
-  readonly description: string;
-  readonly parameters: z.ZodType<TParams>;
-  readonly inputSchema?: z.ZodType<TParams>;
-  execute(params: TParams, options?: { signal?: AbortSignal }): Promise<TResult>;
-}
+export type AiSdkTool = Tool<any, any> & {
+  readonly parameters?: z.ZodType<any>;
+  execute(params: unknown, options?: ToolExecutionOptions): Promise<unknown>;
+};
 
 export type AiSdkToolMap = Record<string, AiSdkTool>;
 
 /**
  * Adapts internal SpecialistToolDefinitions into standard Vercel AI SDK tool definitions.
  * Server context (tenant, principal, runId, epoch) is closed over securely and cannot
- * be altered or injected by the calling model.
+ * be altered or injected by the calling model. The required server role filters
+ * the inventory to the tools that role may use; callers cannot widen it.
  */
 export function toAiSdkTools(
   tools: readonly SpecialistToolDefinition<any, any>[],
-  context: TrustedExecutionContext
+  context: TrustedExecutionContext,
+  serverRole: SpecialistRole
 ): AiSdkToolMap {
   const result: AiSdkToolMap = {};
 
   for (const tool of tools) {
-    result[tool.name] = {
-      description: tool.description,
-      parameters: tool.schema,
-      inputSchema: tool.schema,
-      execute: async (params: unknown, options?: { signal?: AbortSignal }) => {
-        if (options?.signal?.aborted) {
-          throw new HarnessError('EXECUTION_ABORTED', `Execution of tool ${tool.name} was aborted`);
-        }
-        const parsed = tool.schema.safeParse(params);
-        if (!parsed.success) {
-          throw new HarnessError(
-            'INVALID_TOOL_PARAMETERS',
-            `Invalid parameters for tool ${tool.name}: ${parsed.error.message}`
-          );
-        }
-        const stepContext: TrustedExecutionContext = {
-          ...context,
-          signal: options?.signal ?? context.signal,
-        };
-        return tool.execute(parsed.data, stepContext);
-      },
+    // Only tools the server-bound specialist role may use are exposed to the model.
+    if (!tool.allowedRoles.includes(serverRole)) {
+      continue;
+    }
+
+    const execute = async (
+      params: unknown,
+      options?: ToolExecutionOptions
+    ): Promise<unknown> => {
+      const signal = options?.abortSignal ?? context.signal;
+      if (signal?.aborted) {
+        throw new HarnessError('EXECUTION_ABORTED', `Execution of tool ${tool.name} was aborted`);
+      }
+      const parsed = tool.schema.safeParse(params);
+      if (!parsed.success) {
+        throw new HarnessError(
+          'INVALID_TOOL_PARAMETERS',
+          `Invalid parameters for tool ${tool.name}: ${parsed.error.message}`
+        );
+      }
+      const stepContext: TrustedExecutionContext = {
+        ...context,
+        signal: signal ?? context.signal,
+      };
+      const output = await tool.execute(parsed.data, stepContext);
+      signal?.throwIfAborted();
+      return output;
     };
+
+    const wrapped: AiSdkTool = {
+      ...sdkTool({
+        description: tool.description,
+        inputSchema: tool.schema,
+        execute,
+      }),
+      execute,
+      parameters: tool.schema,
+    };
+    result[tool.name] = wrapped;
   }
 
   return result;
@@ -80,7 +102,8 @@ export interface AiSdkSpecialistRunnerOptions {
  * 1. Offline deterministic execution via scripted / tool-calling sequence (ADR-007 delta #1).
  * 2. Strict bounds enforcement: maxSteps and timeoutMs to prevent infinite loops.
  * 3. In-flight abort signal cancellation and step-level race timeout.
- * 4. Audit trail: records step records with inputs, outputs, and elapsed durations.
+ * 4. Audit trail: records step records with redacted summaries; raw tool inputs
+ *    and outputs are never retained.
  */
 export class AiSdkSpecialistRunner {
   private readonly limits: SpecialistLimits;
@@ -129,14 +152,18 @@ export class AiSdkSpecialistRunner {
       const step = steps[i]!;
       const tool = tools[step.toolName];
       if (!tool) {
-        throw new HarnessError('TOOL_NOT_FOUND', `Tool ${step.toolName} not found in AI SDK tool map`);
+        throw new HarnessError('TOOL_NOT_FOUND', `Specialist ${step.toolName} not found in AI SDK tool map`);
       }
 
       const stepStart = Date.now();
       const abortController = new AbortController();
       let timeoutHandle: NodeJS.Timeout | undefined;
 
-      const stepPromise = tool.execute(step.params, { signal: abortController.signal });
+      const stepPromise = tool.execute(step.params, {
+        toolCallId: `${context.runId}-${stepNumber}`,
+        messages: [],
+        abortSignal: abortController.signal,
+      });
 
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
@@ -153,6 +180,12 @@ export class AiSdkSpecialistRunner {
       let output: unknown;
       try {
         output = await Promise.race([stepPromise, timeoutPromise]);
+      } catch (err) {
+        // The losing promise may settle after the deadline; swallow a late
+        // rejection so it cannot surface as an unhandled rejection. Its side
+        // effects may still complete: cancellation is cooperative.
+        stepPromise.catch(() => {});
+        throw err;
       } finally {
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
@@ -165,8 +198,8 @@ export class AiSdkSpecialistRunner {
         stepNumber,
         role,
         toolName: step.toolName,
-        inputSummary: JSON.stringify(step.params),
-        outputSummary: typeof output === 'object' ? JSON.stringify(output) : String(output),
+        inputSummary: '(redacted)',
+        outputSummary: '(redacted)',
         durationMs,
         timestamp: new Date().toISOString(),
       };

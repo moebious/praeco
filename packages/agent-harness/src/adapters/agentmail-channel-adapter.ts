@@ -38,6 +38,8 @@ export interface AgentMailAdapterOptions {
   readonly service: AssignmentService;
   readonly evidencePort?: EvidencePort;
   readonly webhookSecret?: string;
+  /** Explicit synthetic-only bypass for offline fixtures. Never expose on a network-facing endpoint. */
+  readonly allowUnsignedSyntheticWebhook?: boolean;
   readonly clockSkewToleranceMs?: number; // default 300_000ms (5 mins)
   readonly now?: () => number;
   readonly trustedTenantId?: TenantId;
@@ -57,6 +59,8 @@ export interface AgentMailIngestResult {
   readonly principal: TrustedPrincipal;
   readonly attachmentHashes: readonly string[];
   readonly evidenceRef?: EvidenceRunReference;
+  /** Every processed attachment, in payload order; the first entry mirrors evidenceRef. */
+  readonly evidenceRefs: readonly EvidenceRunReference[];
 }
 
 const MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB limit per ADR-001/007
@@ -121,6 +125,12 @@ export function validateAttachmentSignature(mimeType: string, filename: string, 
     }
     return;
   }
+
+  // Only PDF, PNG, and JPEG documents are accepted; anything else fails closed.
+  throw new HarnessError(
+    'UNSUPPORTED_ATTACHMENT_TYPE',
+    `Attachment ${filename} has unsupported type ${mimeType}; only PDF, PNG, and JPEG documents are accepted`
+  );
 }
 
 /**
@@ -211,6 +221,18 @@ export class AgentMailChannelAdapter {
     this.service = options.service;
     this.evidencePort = options.evidencePort;
     this.webhookSecret = options.webhookSecret;
+    if (options.webhookSecret && options.allowUnsignedSyntheticWebhook) {
+      throw new HarnessError(
+        'INVALID_WEBHOOK_CONFIGURATION',
+        'Signed and unsigned intake modes cannot be combined'
+      );
+    }
+    if (!options.webhookSecret && !options.allowUnsignedSyntheticWebhook) {
+      throw new HarnessError(
+        'WEBHOOK_SECRET_REQUIRED',
+        'Configure a webhook secret or explicit synthetic-only intake'
+      );
+    }
     this.clockSkewToleranceMs = options.clockSkewToleranceMs ?? 300_000; // 5 minutes
     this.now = options.now ?? (() => Date.now());
     this.trustedTenantId = options.trustedTenantId;
@@ -420,8 +442,7 @@ export class AgentMailChannelAdapter {
       attachmentHashes.push(hash);
     }
 
-    // 5. Resolve principal binding
-    // Sender email address NEVER confers vendor or FinanceAdmin authority by itself (ADR-006 §12, Abuse case 4)
+    // 5. Resolve principal binding (revocation enforcement only)
     let binding = await this.store.getPrincipalBinding(
       tenantId,
       'AGENTMAIL',
@@ -439,30 +460,23 @@ export class AgentMailChannelAdapter {
       );
     }
 
-    let principal: TrustedPrincipal;
-    if (binding) {
-      if (binding.revoked) {
-        throw new HarnessError(
-          'REVOKED_CHANNEL_USER',
-          `AgentMail user binding for ${verifiedPayload.from} on ${verifiedPayload.installationId} is revoked`
-        );
-      }
-      principal = {
-        tenantId: binding.tenantId,
-        principalId: binding.principalId,
-        roles: binding.roles,
-        bindingRevision: binding.bindingRevision,
-      };
-    } else {
-      // Unlinked / external sender: assigned lowest privilege InboundSender role
-      // Cannot execute financial commands or approve invoices
-      principal = {
-        tenantId,
-        principalId: `agentmail-sender-${verifiedPayload.from.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
-        roles: ['InboundSender'],
-        bindingRevision: 'rev-0',
-      };
+    if (binding?.revoked) {
+      throw new HarnessError(
+        'REVOKED_CHANNEL_USER',
+        `AgentMail user binding for ${verifiedPayload.from} on ${verifiedPayload.installationId} is revoked`
+      );
     }
+
+    // A signed webhook authenticates transport delivery, not the identity in an
+    // email From header (DEMO-002: remitters are never verified merely by their
+    // email address). The binding is consulted only to enforce revocation; it
+    // never grants vendor or FinanceAdmin authority.
+    const principal: TrustedPrincipal = {
+      tenantId,
+      principalId: `agentmail-sender-${verifiedPayload.from.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+      roles: ['InboundSender'],
+      bindingRevision: binding ? `revocation-checked:${binding.bindingRevision}` : 'unverified-address',
+    };
 
     const providerEventId = `agentmail-evt-${verifiedPayload.messageId}`;
     const providerThreadId = verifiedPayload.threadId ?? `thread-${verifiedPayload.messageId}`;
@@ -485,41 +499,51 @@ export class AgentMailChannelAdapter {
       payloadDigest,
     };
 
-    // 6. Create or load via AssignmentService (transactional idempotency + digest matching)
-    const { assignment, isDuplicate } = await this.service.createOrLoad(
-      command,
-      principal
-    );
-
-    // 7. If fresh inbound delivery and attachments exist, ingest first document into L1
-    let evidenceRef: EvidenceRunReference | undefined;
-    if (!isDuplicate && this.evidencePort && attachments.length > 0) {
-      const firstAtt = attachments[0]!;
+    // 6. Process every attachment through L1 BEFORE the intake is accepted.
+    // A failed ingestion leaves no assignment, receipt, or queued outbox event,
+    // and deterministic per-attachment origin IDs make redelivery idempotent.
+    const evidenceRefs: EvidenceRunReference[] = [];
+    if (this.evidencePort && attachments.length > 0) {
       const executionCtx: TrustedExecutionContext = {
         principal,
-        assignmentId: assignment.assignmentId,
+        assignmentId: `intake-${providerEventId}`,
         workerPrincipalId: 'agentmail-worker',
         workerVersionId: 'v1.0.0',
         runId: `run-${providerEventId}`,
         ownershipEpoch: 1,
       };
 
-      evidenceRef = await this.evidencePort.ingestSource(
-        {
-          bytes: firstAtt.content,
-          channel: firstAtt.mimeType === 'application/pdf' ? 'PDF' : 'EMAIL',
-          mimeType: firstAtt.mimeType,
-          displayName: firstAtt.filename,
-          originMessageId: verifiedPayload.messageId,
-        },
-        executionCtx
-      );
-
-      await this.store.attachSourceLink(tenantId, assignment.caseId, {
-        kind: 'DOCUMENT',
-        evidence: evidenceRef,
-      });
+      for (const [index, att] of attachments.entries()) {
+        const hash = attachmentHashes[index]!;
+        const evidence = await this.evidencePort.ingestSource(
+          {
+            bytes: att.content,
+            channel: att.mimeType === 'application/pdf' ? 'PDF' : 'EMAIL',
+            mimeType: att.mimeType,
+            displayName: att.filename,
+            originMessageId: `${providerEventId}:${hash.slice(0, 16)}`,
+          },
+          executionCtx
+        );
+        if (evidence.sourceHashSha256 !== hash) {
+          throw new HarnessError(
+            'EVIDENCE_SOURCE_HASH_MISMATCH',
+            'L1 reference does not match the exact attachment bytes'
+          );
+        }
+        evidenceRefs.push(evidence);
+      }
     }
+
+    // 7. Create or load; documentary links persist in the same store transaction
+    // as the assignment, receipt, command receipt, and queued outbox event.
+    const { assignment, isDuplicate } = await this.service.createOrLoad(
+      command,
+      principal,
+      {
+        sourceLinks: evidenceRefs.map((evidence) => ({ kind: 'DOCUMENT' as const, evidence })),
+      }
+    );
 
     return {
       assignmentId: assignment.assignmentId,
@@ -528,7 +552,8 @@ export class AgentMailChannelAdapter {
       providerEventId,
       principal,
       attachmentHashes,
-      evidenceRef,
+      evidenceRef: evidenceRefs[0],
+      evidenceRefs,
     };
   }
 }

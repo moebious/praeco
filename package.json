@@ -13,7 +13,8 @@
     },
     "@trigger.dev/core": { "socket.io-client": "4.8.3" },
     "engine.io-client": { "ws": "8.21.0" },
-    "@prisma/config": { "deepmerge-ts": "8.0.2" }
+    "@prisma/config": { "deepmerge-ts": "8.0.2" },
+    "@ai-sdk/provider-utils": { "undici": "6.29.0" }
   },
   "scripts": {
     "build": "npm run build --workspace @praeco/evidence-intelligence && npm run build --workspace @praeco/document-classification-adapter && npm run build --workspace @praeco/financial-decision-kernel && npm run build --workspace @praeco/financial-store-sql && npm run build --workspace @praeco/external-document-intake && npm run build --workspace @praeco/agent-harness && npm run build --workspace @praeco/finance-workspace",
