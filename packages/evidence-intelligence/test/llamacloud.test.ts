@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { setup, sample } from './helpers.js';
 import { LlamaCloudAdapter } from '../src/llamacloud.js';
 
@@ -97,6 +99,59 @@ describe('LlamaCloud wire adapters (mocked HTTP, no live credentials)', () => {
     expect(envelope?.processingStatus).toBe('READY_FOR_POLICY_EVALUATION');
     expect(envelope?.invoice?.invoice.number).toMatchObject({ state: 'OBSERVED', value: 'SYN-CO-001' });
     expect(envelope?.evidence.some(item => item.quotedText === 'SYN-CO-001')).toBe(true);
+  });
+  it.each([
+    { name: 'nonexistent page', page: 99, text: 'invoices.0.currency', suffix: '' },
+    { name: 'unrelated citation', page: 1, text: 'unrelated provider quotation', suffix: '' },
+    { name: 'another field placeholder', page: 1, text: 'invoices.0.tax_id', suffix: '' },
+    { name: 'existing wrong page', page: 2, text: 'invoices.0.currency', suffix: '\fSupporting note without invoice fields' },
+    { name: 'nonunique labelled value', page: 1, text: 'invoices.0.currency', suffix: '\nCurrency: COP' },
+  ])('does not recover a currency citation with $name', async ({ page, text, suffix }) => {
+    const content = `${await sample()}${suffix}`;
+    const { runtime } = await setup({ llamaCloud: { apiKey: 'test', pollIntervalMs: 0, fetch: transport(url => {
+      if (url.pathname === '/api/v1/beta/files') return json({ id: 'dfl-synthetic' });
+      if (url.pathname === '/api/v2/extract') return json({ id: 'ext-synthetic', status: 'PENDING' });
+      const response = extractionResponse(content, true, 'schema-path');
+      Object.assign(response.extract_metadata.field_metadata.document_metadata.invoices[0]!, { currency: { citation: [{ page, matching_text: text }] } });
+      return json(response);
+    }) } });
+    const source = await runtime.register({ tenantId: 'a', bytes: Buffer.from(content), channel: 'CHAT', mimeType: 'text/plain' });
+    const [envelope] = await runtime.process(source);
+    expect(envelope?.invoice?.financials.currency).toEqual({ state: 'MISSING', value: null });
+    expect(envelope?.processingStatus).toBe('REVIEW_REQUIRED');
+    expect(envelope?.verification?.checks.some(check => check.code === 'INVALID_PROVIDER_CITATION')).toBe(true);
+  });
+  it('keeps an invalid citation reviewable even when another citation supports the field', async () => {
+    const content = await sample();
+    const { runtime } = await setup({ llamaCloud: { apiKey: 'test', pollIntervalMs: 0, fetch: transport(url => {
+      if (url.pathname === '/api/v1/beta/files') return json({ id: 'dfl-synthetic' });
+      if (url.pathname === '/api/v2/extract') return json({ id: 'ext-synthetic', status: 'PENDING' });
+      const response = extractionResponse(content);
+      Object.assign(response.extract_metadata.field_metadata.document_metadata.invoices[0]!, { currency: { citation: [
+        { page: 1, matching_text: 'Currency: COP' }, { page: 99, matching_text: 'invoices.0.currency' },
+      ] } });
+      return json(response);
+    }) } });
+    const source = await runtime.register({ tenantId: 'a', bytes: Buffer.from(content), channel: 'CHAT', mimeType: 'text/plain' });
+    const [envelope] = await runtime.process(source);
+    expect(envelope?.invoice?.financials.currency).toMatchObject({ state: 'OBSERVED', value: 'COP' });
+    expect(envelope?.processingStatus).toBe('REVIEW_REQUIRED');
+  });
+  it('retains the recognized recovery reason and cited page in the extraction audit artifact', async () => {
+    const content = await sample();
+    const { root, runtime } = await setup({ llamaCloud: { apiKey: 'test', pollIntervalMs: 0, fetch: transport(url => {
+      if (url.pathname === '/api/v1/beta/files') return json({ id: 'dfl-synthetic' });
+      if (url.pathname === '/api/v2/extract') return json({ id: 'ext-synthetic', status: 'PENDING' });
+      return json(extractionResponse(content, true, 'schema-path'));
+    }) } });
+    const source = await runtime.register({ tenantId: 'a', bytes: Buffer.from(content), channel: 'CHAT', mimeType: 'text/plain' });
+    const [envelope] = await runtime.process(source);
+    const retained = await Promise.all(envelope!.artifacts.filter(artifact => artifact.kind === 'EXTRACTION_RAW')
+      .map(async artifact => JSON.parse(await readFile(join(root, artifact.storageKey), 'utf8'))));
+    expect(retained).toContainEqual(expect.objectContaining({ citationAudit: expect.objectContaining({ recovered: expect.arrayContaining([
+      expect.objectContaining({ fieldPath: 'financials.currency', providerFieldPath: 'invoices.0.currency', citedPage: 1,
+        reason: 'SCHEMA_PATH_PLACEHOLDER', rule: 'EXACT_LABEL_VALUE_ON_CITED_PAGE', evidenceIds: expect.any(Array) }),
+    ]) }) }));
   });
   it('does not re-ground a schema-path citation when the extracted value is absent from its labelled source line', async () => {
     const content = await sample();

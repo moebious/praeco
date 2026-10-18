@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DocumentSource, Candidate, EvidenceReference, ObservedField } from './contracts.js';
-import type { ExtractionDraft, ExtractionPort, ExtractionResult, HostedParsePort, ParsedDocument } from './document-processing-ports.js';
+import type { ExtractionDraft, ExtractionPort, ExtractionResult, HostedParsePort, ParsedDocument, ParsedPage } from './document-processing-ports.js';
 import { combine, emptyInvoice, labelsForField, missing, textEvidence } from './extraction.js';
 import { sourceDateToIso } from './dates.js';
 import { L1Error } from './integrity.js';
@@ -34,22 +34,27 @@ const OutputSchema = z.strictObject({ invoices: z.array(InvoiceFieldsSchema).min
 const CitationSchema = z.object({ page: z.number().int().positive(), matching_text: z.string().min(1).max(20_000) });
 const FieldMetadataSchema = z.object({ citation: z.array(CitationSchema).optional() });
 
-function labelledValueEvidence(source: DocumentSource, parsed: ParsedDocument, path: string, value: string, provider: string): EvidenceReference[] {
+interface CitationAudit {
+  policyVersion: 'page-scoped-citations-v1';
+  recovered: { fieldPath: string; providerFieldPath: string; citedPage: number; reason: 'SCHEMA_PATH_PLACEHOLDER';
+    rule: 'EXACT_LABEL_VALUE_ON_CITED_PAGE'; evidenceIds: readonly string[] }[];
+  rejected: { fieldPath: string; providerFieldPath: string; citedPage: number; reason: string }[];
+}
+
+function labelledValueEvidence(source: DocumentSource, page: ParsedPage, path: string, value: string, provider: string): EvidenceReference[] {
   const labels = labelsForField(path);
   if (!labels.length) return [];
   const evidence: EvidenceReference[] = [];
-  for (const page of parsed.pages) {
-    for (const match of page.text.matchAll(/^([^\r\n:]+):[ \t]*([^\r\n]*)/gm)) {
-      const label = match[1]!.trim().toLowerCase();
-      if (!labels.includes(label)) continue;
-      const sourceValue = match[2]!.trim();
-      if (!sourceValue) continue;
-      const dateValue = ['invoice.issueDate', 'invoice.dueDate', 'invoice.billingPeriod.start', 'invoice.billingPeriod.end'].includes(path)
-        ? sourceDateToIso(sourceValue, label) : sourceValue;
-      if (dateValue !== value && sourceValue !== value) continue;
-      const start = match.index + match[0].lastIndexOf(match[2]!) + match[2]!.indexOf(sourceValue);
-      evidence.push(textEvidence(source, page, start, start + sourceValue.length, provider));
-    }
+  for (const match of page.text.matchAll(/^([^\r\n:]+):[ \t]*([^\r\n]*)/gm)) {
+    const label = match[1]!.trim().toLowerCase();
+    if (!labels.includes(label)) continue;
+    const sourceValue = match[2]!.trim();
+    if (!sourceValue) continue;
+    const dateValue = ['invoice.issueDate', 'invoice.dueDate', 'invoice.billingPeriod.start', 'invoice.billingPeriod.end'].includes(path)
+      ? sourceDateToIso(sourceValue, label) : sourceValue;
+    if (dateValue !== value && sourceValue !== value) continue;
+    const start = match.index + match[0].lastIndexOf(match[2]!) + match[2]!.indexOf(sourceValue);
+    evidence.push(textEvidence(source, page, start, start + sourceValue.length, provider));
   }
   return evidence;
 }
@@ -69,7 +74,7 @@ export interface LlamaCloudOptions {
 /** Explicit opt-in: creating this adapter does not make network requests. */
 export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
   readonly provider = 'LLAMAEXTRACT';
-  readonly version = 'extract-v2';
+  readonly version = 'extract-v2:page-scoped-citations-v1';
   readonly configuration = {
     tier: 'cost_effective', cite_sources: true, confidence_scores: true,
     data_schema: { type: 'object', required: ['invoices'], additionalProperties: false, properties: {
@@ -169,31 +174,41 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
     const output = OutputSchema.parse(result.extract_result);
     const metadata = z.object({ field_metadata: z.object({ document_metadata: z.object({ invoices: z.array(z.record(z.string(), z.unknown())) }) }) })
       .safeParse(result.extract_metadata);
+    const citationAudit: CitationAudit = { policyVersion: 'page-scoped-citations-v1', recovered: [], rejected: [] };
     const drafts: ExtractionDraft[] = output.invoices.map((fields, index) => {
       const evidence: EvidenceReference[] = [], issues: string[] = [];
       const rootMetadata = metadata.success ? metadata.data.field_metadata.document_metadata.invoices[index] ?? {} : {};
-      const cited = (value: string | null, metadataInput: unknown, fieldPath: string): ObservedField<string> => {
+      const cited = (value: string | null, metadataInput: unknown, fieldPath: string, providerFieldPath: string): ObservedField<string> => {
         if (value === null) return missing();
         const meta = FieldMetadataSchema.safeParse(metadataInput);
         const citations = meta.success ? meta.data.citation ?? [] : [];
         const candidates: Candidate<string>[] = [];
         for (const cite of citations) {
+          const reject = (reason: string) => {
+            issues.push('INVALID_PROVIDER_CITATION');
+            citationAudit.rejected.push({ fieldPath, providerFieldPath, citedPage: cite.page, reason });
+          };
           const page = parsed.pages.find(page => page.page === cite.page);
-          if (!page) continue;
+          if (!page) { reject('CITED_PAGE_NOT_FOUND'); continue; }
+          if (cite.matching_text === providerFieldPath) {
+            const grounded = labelledValueEvidence(source, page, fieldPath, value, this.provider);
+            if (grounded.length !== 1) { reject(grounded.length ? 'NONUNIQUE_LABELLED_VALUE' : 'LABELLED_VALUE_NOT_FOUND_ON_CITED_PAGE'); continue; }
+            evidence.push(...grounded);
+            candidates.push({ value, evidenceIds: [grounded[0]!.evidenceId] });
+            citationAudit.recovered.push({ fieldPath, providerFieldPath, citedPage: cite.page, reason: 'SCHEMA_PATH_PLACEHOLDER',
+              rule: 'EXACT_LABEL_VALUE_ON_CITED_PAGE', evidenceIds: [grounded[0]!.evidenceId] });
+            continue;
+          }
           const offset = page.text.indexOf(cite.matching_text);
-          if (offset < 0 || page.text.indexOf(cite.matching_text, offset + 1) >= 0) continue;
+          if (offset < 0) { reject('UNRECOGNIZED_CITATION_TEXT'); continue; }
+          if (page.text.indexOf(cite.matching_text, offset + 1) >= 0) { reject('NONUNIQUE_CITATION_TEXT'); continue; }
           const item = textEvidence(source, page, offset, offset + cite.matching_text.length, this.provider);
           evidence.push(item); candidates.push({ value, evidenceIds: [item.evidenceId] });
-        }
-        if (candidates.length === 0 && citations.length > 0) {
-          const grounded = labelledValueEvidence(source, parsed, fieldPath, value, this.provider);
-          evidence.push(...grounded);
-          candidates.push(...grounded.map(item => ({ value, evidenceIds: [item.evidenceId] })));
         }
         if (candidates.length === 0) { issues.push('UNCITED_PROVIDER_VALUE'); return missing(); }
         return { state: 'OBSERVED', value, evidenceIds: [candidates[0]!.evidenceIds[0]!, ...candidates.slice(1).map(c => c.evidenceIds[0]!)] };
       };
-      const get = (field: Field): ObservedField<string> => cited(fields[field], rootMetadata[field], FIELD_PATHS[field]);
+      const get = (field: Field): ObservedField<string> => cited(fields[field], rootMetadata[field], FIELD_PATHS[field], `invoices.${index}.${field}`);
       const invoice = emptyInvoice();
       if (parsed.pages.some(page => /^\s*cuenta de cobro\s*$/im.test(page.text))) invoice.documentType = 'CUENTA_DE_COBRO';
       invoice.invoice.number = get('invoice_number'); invoice.invoice.issueDate = get('issue_date'); invoice.invoice.dueDate = get('due_date');
@@ -210,10 +225,11 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
       invoice.commercial.lineItems = (fields.line_items ?? []).map((line, lineIndex) => {
         if (line.line_number !== lineIndex + 1) issues.push('LINE_ITEM_ORDER_REVIEW');
         const meta = lineMetadata.success ? lineMetadata.data[lineIndex] ?? {} : {};
-        return { lineNumber: line.line_number, description: cited(line.description, meta.description, `commercial.lineItems.${lineIndex}.description`),
-          quantity: cited(line.quantity, meta.quantity, `commercial.lineItems.${lineIndex}.quantity`),
-          unitPrice: combine(cited(line.unit_price, meta.unit_price, `commercial.lineItems.${lineIndex}.unitPrice.amount`), invoice.financials.currency, (amount, currency) => ({ amount, currency })),
-          lineTotal: combine(cited(line.line_total, meta.line_total, `commercial.lineItems.${lineIndex}.lineTotal.amount`), invoice.financials.currency, (amount, currency) => ({ amount, currency })),
+        const providerLine = `invoices.${index}.line_items.${lineIndex}`;
+        return { lineNumber: line.line_number, description: cited(line.description, meta.description, `commercial.lineItems.${lineIndex}.description`, `${providerLine}.description`),
+          quantity: cited(line.quantity, meta.quantity, `commercial.lineItems.${lineIndex}.quantity`, `${providerLine}.quantity`),
+          unitPrice: combine(cited(line.unit_price, meta.unit_price, `commercial.lineItems.${lineIndex}.unitPrice.amount`, `${providerLine}.unit_price`), invoice.financials.currency, (amount, currency) => ({ amount, currency })),
+          lineTotal: combine(cited(line.line_total, meta.line_total, `commercial.lineItems.${lineIndex}.lineTotal.amount`, `${providerLine}.line_total`), invoice.financials.currency, (amount, currency) => ({ amount, currency })),
         };
       });
       if (invoice.commercial.lineItems.length) {
@@ -225,6 +241,6 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
     });
     // Until splitting is independently validated, multiple cloud invoices require review; never conflate sources.
     if (drafts.length > 1) for (const draft of drafts) draft.issues = [...(draft.issues ?? []), 'CLOUD_PACKET_BOUNDARIES_UNVERIFIED'];
-    return { drafts, raw: result };
+    return { drafts, raw: { providerResult: result, citationAudit } };
   }
 }

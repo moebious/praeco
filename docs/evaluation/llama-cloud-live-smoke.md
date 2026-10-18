@@ -41,8 +41,14 @@ The recheck used the same synthetic USD PDF, COP PDF and PNG scan. Both PDFs mat
 | COP cuenta de cobro | Yes | `READY_FOR_POLICY_EVALUATION` | `ACCEPTED` | Synthetic smoke only |
 | PNG scan | No | `REVIEW_REQUIRED` | `REVIEW_REQUIRED` | `OCR_FIDELITY_UNVERIFIED`; critical fields remain ungrounded |
 
+## Adversarial review restriction
+
+The recovery used in that live recheck was subsequently narrowed. The current `page-scoped-citations-v1` policy recognizes only the exact schema placeholder for the extracted field and requires one complete labelled-value match on its cited, existing page. It never searches another page to repair a bad citation. Unrelated quotes, wrong-field placeholders, nonexistent pages and nonunique matches remain review signals, including when another citation supports the field.
+
+The retained extraction artifact now contains `providerResult` and `citationAudit`. Recovery entries record the field, original cited page, reason, rule and resulting evidence IDs; rejected citations retain their reason. The provider result is preserved separately from the adapter's findings. Deterministic regressions exercise these restrictions; no live hosted recheck has been run for the narrowed policy.
+
 ## Decision
 
-LlamaParse processed the three synthetic inputs at the cost-effective tier. The latest adapter passed the two synthetic digital-PDF smoke cases using local labelled-text grounding and kept the scan in review. This narrow smoke does not establish general LlamaExtract accuracy or production readiness. Do not weaken the verifier or treat confidence scores as evidence. Independent human field annotation and the 30-document evaluation remain required. For the hackathon demo, use Praeco's deterministic synthetic extractor for the labelled fixture corpus; present hosted behavior as a limited synthetic smoke result.
+LlamaParse processed the three synthetic inputs at the cost-effective tier. An earlier adapter revision passed the two synthetic digital-PDF smoke cases using local labelled-text grounding and kept the scan in review. The current page-scoped policy has deterministic regression coverage; those earlier hosted results do not validate this revised adapter or general LlamaExtract accuracy. Do not weaken the verifier or treat confidence scores as evidence. Independent human field annotation and broader provider evaluation remain pending. For the hackathon demo, use Praeco's deterministic synthetic extractor for the labelled fixture corpus; present hosted behavior as a limited historical synthetic smoke result.
 
 No real customer or company documents were sent. No financial decision or payment was made. Independent human annotation and broader provider quality validation remain pending.
