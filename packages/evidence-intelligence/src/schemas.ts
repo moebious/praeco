@@ -85,6 +85,5 @@ const EnvelopeStructureSchema = z.strictObject({
     ctx.addIssue({ code: 'custom', message: 'Ready envelope requires all critical fields' });
 });
 export function parseEnvelope(input: unknown): InvoiceEnvelope {
-  // The discriminated ready branch is checked by the refinement above; trust is separately resolved from storage.
   return EnvelopeStructureSchema.parse(input) as InvoiceEnvelope;
 }

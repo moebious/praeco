@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { setup, sample } from './helpers.js';
 import { createL1, accountAuditReference } from '../src/service.js';
-import type { ImmutablePersistencePort, ExtractionPort } from '../src/ports.js';
+import type { ImmutablePersistencePort, ExtractionPort } from '../src/document-processing-ports.js';
 import { LabelledTextExtractor } from '../src/extraction.js';
 import { L1Error } from '../src/integrity.js';
 

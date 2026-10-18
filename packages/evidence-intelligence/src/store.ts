@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { ArtifactRef, DocumentSource, InvoiceEnvelope } from './contracts.js';
 import { canonicalJson, digest, L1Error, sha256 } from './integrity.js';
 import { DocumentSourceSchema, IdSchema, parseEnvelope } from './schemas.js';
-import type { ImmutablePersistencePort } from './ports.js';
+import type { ImmutablePersistencePort } from './document-processing-ports.js';
 
 export interface SourceInput {
   tenantId: string;

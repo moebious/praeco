@@ -2,7 +2,7 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createL1, summarize } from '../src/service.js';
-import { DEMO_RATES } from '../src/money.js';
+import { DEMO_RATES } from '../src/financial-normalization.js';
 import { Decimal } from 'decimal.js';
 
 if (process.env.L1_RUN_LIVE_SMOKE !== '1' || !process.env.LLAMA_CLOUD_API_KEY) {
@@ -20,7 +20,11 @@ if (process.env.L1_RUN_LIVE_SMOKE !== '1' || !process.env.LLAMA_CLOUD_API_KEY) {
     ...(process.env.LLAMA_CLOUD_PROJECT_ID ? { projectId: process.env.LLAMA_CLOUD_PROJECT_ID } : {}),
     ...(process.env.LLAMA_PARSE_VERSION ? { parseVersion: process.env.LLAMA_PARSE_VERSION } : {}),
     onEvent: async event => {
-      if (event && typeof event === 'object' && 'result' in event && event.result && typeof event.result === 'object' && 'usage' in event.result) usage.push(event.result.usage);
+      if (event && typeof event === 'object' && 'result' in event && event.result && typeof event.result === 'object') {
+        const result = event.result as Record<string, unknown>;
+        const usageValue = result.usage ?? (result.job && typeof result.job === 'object' ? (result.job as Record<string, unknown>).usage : undefined);
+        if (usageValue) usage.push(usageValue);
+      }
     },
   } });
   const results = [];
@@ -34,8 +38,13 @@ if (process.env.L1_RUN_LIVE_SMOKE !== '1' || !process.env.LLAMA_CLOUD_API_KEY) {
     const dispositionMatches = envelope?.processingStatus === (input.name === 'scan' ? 'REVIEW_REQUIRED' : 'READY_FOR_POLICY_EVALUATION');
     results.push({ name: input.name, fieldsMatch, dispositionMatches, elapsedMs: Number((performance.now() - start).toFixed(2)), ...(envelope ? summarize(envelope) : { processingStatus: 'NO_ENVELOPE' }) });
   }
+  const reportedCredits = usage.map(value => value && typeof value === 'object' && 'credits' in value
+    && typeof value.credits === 'number' && Number.isFinite(value.credits) ? value.credits : null);
+  const providerReportedCredits = reportedCredits.every(value => value !== null)
+    ? reportedCredits.reduce<number>((sum, value) => sum + (value ?? 0), 0) : null;
   const report = { mode: 'live-provider-smoke', observedAt: new Date().toISOString(), results, providerReportedUsage: usage,
-    costUsd: null, independentHumanAnnotation: 'PENDING', productionVerified: false };
+    providerReportedCredits, publishedRateEquivalentUsd: providerReportedCredits === null ? null : providerReportedCredits * 1.25 / 1000,
+    independentHumanAnnotation: 'PENDING', productionVerified: false };
   await mkdir(storageRoot, { recursive: true });
   await writeFile(resolve(storageRoot, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));

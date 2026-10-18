@@ -1,11 +1,13 @@
 import { LiteParse } from '@llamaindex/liteparse';
 import type { DocumentSource } from './contracts.js';
-import type { HostedParsePort, ParsedDocument } from './ports.js';
+import type { HostedParsePort, ParsedDocument } from './document-processing-ports.js';
 import { FileEvidenceStore } from './store.js';
 import { L1Error, utf8 } from './integrity.js';
 
 export class AdaptiveParser {
-  private readonly lite = new LiteParse({ ocrEnabled: false, outputFormat: 'json', includeComplexity: true, maxPages: 50, poolSize: 1, parseTimeoutMs: 30_000 });
+  // LiteParse uses its bundled local Tesseract OCR only on pages that need it.
+  // OCR-assisted output remains REVIEW_REQUIRED until a human validates it.
+  private readonly lite = new LiteParse({ ocrEnabled: true, outputFormat: 'json', includeComplexity: true, maxPages: 50, poolSize: 1, parseTimeoutMs: 30_000 });
   constructor(private readonly store: FileEvidenceStore, private readonly hosted?: HostedParsePort) {}
   async close(): Promise<void> { await this.lite.close(); }
   async parse(source: DocumentSource, bytes: Uint8Array): Promise<ParsedDocument> {
@@ -29,12 +31,10 @@ export class AdaptiveParser {
       catch { throw new L1Error('LITEPARSE_FAILED', 'PARSE', true); }
       if (result.totalPages > 50 || result.pages.length !== result.totalPages || result.pageErrors.length > 0)
         throw new L1Error('PDF_PAGE_LIMIT_OR_PARTIAL_PARSE', 'PARSE');
-      // Retain every original page separately; no flattening of packet citations.
-      // LiteParse's document text is not a page delimiter API; use each page's text.
+      // Keep page text separate to preserve original-page citation mapping.
       texts = result.pages.map(page => page.text);
       raw = result;
-      // Sparse native text alone is common on simple invoices. Do not turn every
-      // whitespace-heavy digital invoice into a failed OCR case.
+      // Sparse text alone is common on simple invoices, so it does not trigger OCR review.
       const complex = result.pages.some(page => {
         const c = page.complexity;
         return c && (c.fullPageImage || c.isGarbled || c.layout?.isComplex
@@ -42,7 +42,8 @@ export class AdaptiveParser {
       });
       assurance = !complex && texts.every(t => t.trim().length >= 30) ? 'DIGITAL_TEXT' : 'OCR_REQUIRES_REVIEW';
       parser = { provider: 'LITEPARSE', version: '2.15.1' };
-      if (assurance === 'OCR_REQUIRES_REVIEW' && this.hosted) {
+      // Use LlamaParse text for both extraction and citation grounding; OCR stays review-only.
+      if (this.hosted) {
         const hosted = await this.hosted.parse(source, bytes);
         texts = hosted.pages; raw = hosted.raw; parser = { provider: 'LLAMAPARSE', version: hosted.version };
       }

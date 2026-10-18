@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DocumentSource, Candidate, EvidenceReference, ObservedField } from './contracts.js';
-import type { ExtractionDraft, ExtractionPort, ExtractionResult, HostedParsePort, ParsedDocument } from './ports.js';
+import type { ExtractionDraft, ExtractionPort, ExtractionResult, HostedParsePort, ParsedDocument } from './document-processing-ports.js';
 import { combine, emptyInvoice, missing, textEvidence } from './extraction.js';
 import { L1Error } from './integrity.js';
 
@@ -40,7 +40,7 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
   readonly provider = 'LLAMAEXTRACT';
   readonly version = 'extract-v2';
   readonly configuration = {
-    tier: 'agentic', cite_sources: true, confidence_scores: true,
+    tier: 'cost_effective', cite_sources: true, confidence_scores: true,
     data_schema: { type: 'object', required: ['invoices'], additionalProperties: false, properties: {
       invoices: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object', additionalProperties: false, required: [...fieldKeys, 'line_items'],
         properties: { ...Object.fromEntries(fieldKeys.map(key => [key, { type: ['string', 'null'],
@@ -87,7 +87,9 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
   }
   private async upload(source: DocumentSource, bytes: Uint8Array, purpose: 'parse' | 'extract'): Promise<string> {
     const form = new FormData();
-    form.set('purpose', purpose); form.set('file', new Blob([new Uint8Array(bytes)], { type: source.mimeType }), `source.${source.channel === 'PDF' ? 'pdf' : source.channel === 'IMAGE' ? 'img' : 'txt'}`);
+    const extension = source.mimeType === 'application/pdf' ? 'pdf' : source.mimeType === 'image/png' ? 'png'
+      : source.mimeType === 'image/jpeg' ? 'jpg' : 'txt';
+    form.set('purpose', purpose); form.set('file', new Blob([new Uint8Array(bytes)], { type: source.mimeType }), `source.${extension}`);
     const response = await this.call('/api/v1/beta/files', purpose === 'parse' ? 'PARSE' : 'EXTRACT', { method: 'POST', body: form });
     const id = z.string().min(1).max(200).parse(response.id);
     await this.options.onEvent?.({ provider: 'LLAMACLOUD', purpose, operation: 'upload', fileId: id, sourceId: source.sourceId });
@@ -95,7 +97,7 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
   }
   private async poll(kind: 'parse' | 'extract', id: string): Promise<Record<string, unknown>> {
     const stage = kind === 'parse' ? 'PARSE' : 'EXTRACT';
-    const expand = kind === 'parse' ? 'expand=markdown' : 'expand=extract_metadata&expand=configuration&expand=usage';
+    const expand = kind === 'parse' ? 'expand=markdown&expand=usage' : 'expand=extract_metadata&expand=configuration&expand=usage';
     for (let attempt = 0; attempt < (this.options.maxPolls ?? 60); attempt++) {
       let result: Record<string, unknown>;
       try { result = await this.call(`/api/v2/${kind}/${encodeURIComponent(id)}?${expand}`, stage); }
@@ -115,7 +117,7 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
   async parse(source: DocumentSource, bytes: Uint8Array): Promise<{ pages: readonly string[]; version: string; raw: unknown }> {
     const fileId = await this.upload(source, bytes, 'parse');
     const started = await this.call('/api/v2/parse', 'PARSE', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_id: fileId, tier: 'agentic', version: this.options.parseVersion ?? 'latest' }) });
+      body: JSON.stringify({ file_id: fileId, tier: 'cost_effective', version: this.options.parseVersion ?? 'latest' }) });
     const id = z.string().min(1).max(200).parse(started.id);
     await this.options.onEvent?.({ provider: 'LLAMAPARSE', operation: 'started', sourceId: source.sourceId, jobId: id });
     const result = await this.poll('parse', id);
@@ -123,9 +125,13 @@ export class LlamaCloudAdapter implements ExtractionPort, HostedParsePort {
     return { pages: pages.map(p => p.markdown), version: `api-v2:${this.options.parseVersion ?? 'latest'}`, raw: result };
   }
   async extract({ source, bytes, parsed }: { source: DocumentSource; bytes: Uint8Array; parsed: ParsedDocument }): Promise<ExtractionResult> {
-    const fileId = await this.upload(source, bytes, 'extract');
+    const parsedJob = parsed.parser.provider === 'LLAMAPARSE'
+      ? z.object({ job: z.object({ id: z.string().min(1).max(200) }) }).safeParse(parsed.raw)
+      : undefined;
+    if (parsed.parser.provider === 'LLAMAPARSE' && !parsedJob?.success) throw new L1Error('LLAMAPARSE_JOB_REFERENCE_MISSING', 'EXTRACT');
+    const fileInput = parsedJob?.success ? parsedJob.data.job.id : await this.upload(source, bytes, 'extract');
     const started = await this.call('/api/v2/extract', 'EXTRACT', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_input: fileId, configuration: this.configuration }) });
+      body: JSON.stringify({ file_input: fileInput, configuration: this.configuration }) });
     const id = z.string().min(1).max(200).parse(started.id);
     await this.options.onEvent?.({ provider: 'LLAMAEXTRACT', operation: 'started', sourceId: source.sourceId, jobId: id });
     const result = await this.poll('extract', id);

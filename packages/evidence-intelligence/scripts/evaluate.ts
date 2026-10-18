@@ -1,4 +1,3 @@
-/** Test-only evaluator. Never imported by dist/, adapters or application prompts. */
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';

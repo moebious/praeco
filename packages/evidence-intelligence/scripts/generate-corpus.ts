@@ -1,4 +1,3 @@
-/** Maintainer-only synthetic fixture generator. Never imported by runtime code. */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';

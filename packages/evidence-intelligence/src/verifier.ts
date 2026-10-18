@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { DocumentSource, FinancialNormalization, InvoicePayload, VerificationCheck, VerificationReport, EvidenceReference } from './contracts.js';
-import type { ExtractionDraft, ParsedDocument } from './ports.js';
+import type { ExtractionDraft, ParsedDocument } from './document-processing-ports.js';
 import { digest, L1Error, sliceUtf8 } from './integrity.js';
 import { FIELD_LABELS, labelsForField } from './extraction.js';
 import { EvidenceSchema, InvoicePayloadSchema, SegmentSchema } from './schemas.js';
 import { FileEvidenceStore } from './store.js';
-import { normalize } from './money.js';
+import { normalize } from './financial-normalization.js';
 import type { FxRateSnapshot } from './contracts.js';
 import { sourceDateToIso } from './dates.js';
 

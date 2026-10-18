@@ -1,4 +1,3 @@
-/** Input generation is deliberately independent from the expected-result manifest. */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';

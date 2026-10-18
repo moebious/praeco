@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { emptyInvoice } from '../src/extraction.js';
-import { normalize, DEMO_RATES } from '../src/money.js';
+import { normalize, DEMO_RATES } from '../src/financial-normalization.js';
 import type { InvoicePayload, ObservedField } from '../src/contracts.js';
 const value = <T>(v: T): ObservedField<T> => ({ state: 'OBSERVED', value: v, evidenceIds: ['arithmetic-test'] });
 function invoice(amount: string, currency = 'USD'): InvoicePayload {

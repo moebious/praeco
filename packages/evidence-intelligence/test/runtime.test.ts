@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setup, sample } from './helpers.js';
 import { LabelledTextExtractor } from '../src/extraction.js';
-import type { ExtractionPort } from '../src/ports.js';
+import type { ExtractionPort } from '../src/document-processing-ports.js';
 import { canonicalJson, digest, sha256 } from '../src/integrity.js';
 import { parseEnvelope } from '../src/schemas.js';
 import { summarize, compareUsdRatio, createL1 } from '../src/service.js';

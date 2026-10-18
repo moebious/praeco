@@ -3,14 +3,14 @@ import { ZodError } from 'zod';
 import type { ArtifactRef, DocumentIntelligencePort, DocumentSource, FxRateSnapshot, InvoiceEnvelope, ProcessingProvenance } from './contracts.js';
 import { L1_CONTRACT_VERSION } from './contracts.js';
 import { canonicalJson, digest, L1Error } from './integrity.js';
-import { DEMO_RATES, NORMALIZATION_VERSION, decimal, normalize } from './money.js';
+import { DEMO_RATES, NORMALIZATION_VERSION, decimal, normalize } from './financial-normalization.js';
 import { LabelledTextExtractor } from './extraction.js';
 import { FileEvidenceStore } from './store.js';
 import type { SourceInput } from './store.js';
 import { AdaptiveParser } from './parser.js';
 import { LlamaCloudAdapter } from './llamacloud.js';
 import type { LlamaCloudOptions } from './llamacloud.js';
-import type { ExtractionPort, ExtractionDraft, ParsedDocument, ImmutablePersistencePort } from './ports.js';
+import type { ExtractionPort, ExtractionDraft, ParsedDocument, ImmutablePersistencePort } from './document-processing-ports.js';
 import { EvidenceVerifier, VERIFIER_VERSION } from './verifier.js';
 import { parseEnvelope, ReportSchema } from './schemas.js';
 import { isSupplementalContext } from './context.js';
@@ -18,17 +18,14 @@ import { isSupplementalContext } from './context.js';
 export interface L1Options {
   storageRoot: string;
   llamaCloud?: LlamaCloudOptions;
-  /** Explicit offline/third-party adapter. Default is LlamaExtract when cloud is configured. */
   extractor?: ExtractionPort;
   rates?: readonly FxRateSnapshot[];
   now?: () => string;
-  /** Optional backend implementation (e.g. Neon + object storage), never a domain dependency. */
   persistence?: ImmutablePersistencePort;
 }
 export interface ReadyEvidence {
   envelope: Extract<InvoiceEnvelope, { processingStatus: 'READY_FOR_POLICY_EVALUATION' }>;
   integrityDigestSha256: string;
-  /** L2 compares exact ratios against its policy limits; usdEquivalent is rounded for display. */
   usdRatio: { numerator: string; denominator: string };
 }
 export interface EvidenceReader {
@@ -38,12 +35,10 @@ export interface EvidenceReader {
 }
 export interface L1Runtime extends DocumentIntelligencePort {
   register(input: SourceInput): Promise<DocumentSource>;
-  /** Reverify retained extraction with original rates/rules; never calls external providers. */
   replay(tenantId: string, envelopeId: string): Promise<InvoiceEnvelope>;
   readonly reader: EvidenceReader;
 }
 
-/** Trusted backend composition root. L3 receives register/process; L2 receives only reader. */
 export function createL1(options: L1Options): L1Runtime {
   const now = options.now ?? (() => new Date().toISOString());
   const store = new FileEvidenceStore(options.storageRoot, now, options.persistence);
@@ -97,7 +92,6 @@ export function createL1(options: L1Options): L1Runtime {
       return replayed;
     },
     async process(input) {
-      // Reject unregistered/cross-tenant/mutated source descriptors before doing any provider work.
       const bytes = await store.sourceBytes(input);
       const source = structuredClone(input), pipelineRunId = `run-${randomUUID()}`;
       const artifacts: ArtifactRef[] = [await store.retain(source, 'ORIGINAL', bytes)];

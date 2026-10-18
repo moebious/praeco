@@ -1,5 +1,5 @@
 import type { Candidate, DocumentSource, EvidenceReference, InvoicePayload, ObservedField } from './contracts.js';
-import type { ExtractionPort, ExtractionResult, ParsedDocument, ParsedPage } from './ports.js';
+import type { ExtractionPort, ExtractionResult, ParsedDocument, ParsedPage } from './document-processing-ports.js';
 import { digest, L1Error } from './integrity.js';
 import { sourceDateToIso } from './dates.js';
 

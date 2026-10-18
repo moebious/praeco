@@ -1,5 +1,5 @@
 import type { DocumentSource } from './contracts.js';
-import type { ParsedDocument } from './ports.js';
+import type { ParsedDocument } from './document-processing-ports.js';
 import { FIELD_LABELS } from './extraction.js';
 
 /** Conservative deterministic admission for native supplementary messages.
