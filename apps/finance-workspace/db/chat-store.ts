@@ -19,7 +19,9 @@ export function createChatStore<T extends PgQueryResultHKT>(database: PgDatabase
           eq(conversations.ownerUserId, scope.userId)))
       if (!conversation) throw new WorkspaceChatError("CHAT_ACCESS_DENIED")
       const expiresAt = new Date(Date.now() + CHAT_LEASE_SECONDS * 1000).toISOString()
-      await database.insert(chatAccess).values({ conversationId: id, expiresAt, maxCalls })
+      await database.insert(chatAccess).values({
+        conversationId: id, bindingId: randomUUID(), expiresAt, maxCalls,
+      })
         .onConflictDoUpdate({ target: chatAccess.conversationId, set: { expiresAt } })
       const [access] = await database.select().from(chatAccess).where(eq(chatAccess.conversationId, id))
       return access
@@ -34,16 +36,25 @@ export function createChatStore<T extends PgQueryResultHKT>(database: PgDatabase
           eq(conversations.ownerUserId, scope.userId)))
       return record?.sessionId ?? null
     },
+    async bootstrap(scope: ConversationScope, id: string) {
+      const [record] = await database.select({
+        bindingId: chatAccess.bindingId, sessionId: chatAccess.sessionId,
+      }).from(chatAccess).innerJoin(conversations, eq(conversations.id, chatAccess.conversationId))
+        .where(and(eq(conversations.id, id), eq(conversations.tenantId, scope.tenantId),
+          eq(conversations.ownerUserId, scope.userId)))
+      if (!record) throw new WorkspaceChatError("CHAT_ACCESS_DENIED")
+      return record
+    },
     /** Worker-only read: the lease was granted by a separately authenticated action. */
-    async context(id: string, expectedSessionId?: string) {
+    async context(id: string, bindingId: string) {
       const [context] = await database.select({
         id: conversations.id, tenantId: conversations.tenantId, userId: conversations.ownerUserId,
         specialistId: conversations.specialistId, expiresAt: chatAccess.expiresAt,
-        sessionId: chatAccess.sessionId,
+        sessionId: chatAccess.sessionId, bindingId: chatAccess.bindingId,
       }).from(conversations).innerJoin(chatAccess, eq(conversations.id, chatAccess.conversationId))
         .where(eq(conversations.id, id))
       if (!context || new Date(context.expiresAt).getTime() <= Date.now() ||
-          (expectedSessionId !== undefined && context.sessionId !== expectedSessionId)) {
+          context.bindingId !== bindingId) {
         throw new WorkspaceChatError("CHAT_ACCESS_DENIED")
       }
       return context
@@ -59,8 +70,8 @@ export function createChatStore<T extends PgQueryResultHKT>(database: PgDatabase
         if (calls.some((call) => call.requestKey === requestKey)) {
           throw new WorkspaceChatError("CHAT_DUPLICATE_CALL")
         }
-        if (calls.some((call) => call.status === "unknown")) throw new WorkspaceChatError("CHAT_COST_UNKNOWN")
         if (calls.some((call) => call.status === "reserved")) throw new WorkspaceChatError("CHAT_BUSY")
+        if (calls.some((call) => call.status === "unknown")) throw new WorkspaceChatError("CHAT_COST_UNKNOWN")
         const committed = calls.reduce((sum, call) =>
           sum + usdToNanos(call.actualUsd ?? call.reservedUsd), 0n)
         if (calls.length >= access.maxCalls ||

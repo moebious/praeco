@@ -23,6 +23,7 @@ export const conversations = workspaceSchema.table("conversations", {
 
 export const chatAccess = workspaceSchema.table("chat_access", {
   conversationId: uuid("conversation_id").primaryKey().references(() => conversations.id, { onDelete: "cascade" }),
+  bindingId: uuid("binding_id").notNull(),
   sessionId: text("session_id"),
   expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }).notNull(),
   budgetUsd: numeric("budget_usd", { precision: 20, scale: 9 }).notNull().default("0.05"),

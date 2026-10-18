@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 vi.mock("server-only", () => ({}))
 
 import { createConversationStore } from "@/db/conversation-store"
+import { createChatStore } from "@/db/chat-store"
 import { applyWorkspaceMigration } from "@/db/migrate"
 import { workspacePoolConfiguration } from "@/db/connection"
 import * as schema from "@/db/schema"
@@ -15,11 +16,13 @@ import { metadataFailure, summarizeConversation } from "@/lib/conversations"
 const client = new PGlite()
 const database = drizzle(client, { schema })
 const migration = readFileSync(new URL("../db/migrations/0001_conversations.sql", import.meta.url), "utf8")
+const chatMigration = readFileSync(new URL("../db/migrations/0002_chat_inference.sql", import.meta.url), "utf8")
+const bindingMigration = readFileSync(new URL("../db/migrations/0003_chat_worker_binding.sql", import.meta.url), "utf8")
 const migrationConnection = {
   async query(sql: string, parameters?: unknown[]) {
     // PGlite's prepared query API accepts one statement; exec matches pg's
     // parameter-free migration batch behavior, still inside the transaction.
-    if (sql === migration) {
+    if (sql === migration || sql === chatMigration || sql === bindingMigration) {
       await client.exec(sql)
       return { rows: [] }
     }
@@ -28,13 +31,101 @@ const migrationConnection = {
 }
 const scope = { tenantId: "org:synthetic-a", userId: "user_synthetic-a" }
 const store = createConversationStore(database)
+const chatStore = createChatStore(database)
 
 beforeAll(async () => {
   await applyWorkspaceMigration(migrationConnection, migration)
+  await applyWorkspaceMigration(migrationConnection, chatMigration, "0002_chat_inference")
+  await applyWorkspaceMigration(migrationConnection, bindingMigration, "0003_chat_worker_binding")
 // Initial WASM compilation can be slow on a shared development host.
 }, 120_000)
 beforeEach(async () => {
-  await client.exec("TRUNCATE praeco_workspace.conversations")
+  await client.exec("DELETE FROM praeco_workspace.conversations")
+})
+
+describe("Trigger chat leases and inference budgets, separate from the financial ledger", () => {
+  async function authorizedConversation(maxCalls = 20) {
+    const [conversation] = await store.initialize(scope)
+    const access = await chatStore.authorize(scope, conversation.id, maxCalls)
+    return { id: conversation.id, bindingId: access.bindingId }
+  }
+
+  it("requires the authenticated tenant and owner before granting a worker binding", async () => {
+    const [conversation] = await store.initialize(scope)
+    await expect(chatStore.authorize({ ...scope, userId: "user-other" }, conversation.id))
+      .rejects.toMatchObject({ code: "CHAT_ACCESS_DENIED" })
+    await expect(chatStore.authorize({ ...scope, tenantId: "tenant-other" }, conversation.id))
+      .rejects.toMatchObject({ code: "CHAT_ACCESS_DENIED" })
+  })
+
+  it("binds worker context to an unguessable server-issued lease", async () => {
+    const { id, bindingId } = await authorizedConversation()
+    expect((await chatStore.context(id, bindingId)).userId).toBe(scope.userId)
+    await expect(chatStore.context(id, randomUUID())).rejects.toMatchObject({
+      code: "CHAT_ACCESS_DENIED",
+    })
+  })
+
+  it("keeps message metadata separate and records model usage under the same schema", async () => {
+    const { id } = await authorizedConversation()
+    const reservation = await chatStore.reserve(id, "message-1:0", "synthetic/model", "0.01")
+    await chatStore.complete(reservation, {
+      model: "synthetic/model", provider: "synthetic", costUsd: "0.000012",
+      inputTokens: 10, outputTokens: 3,
+    }, { cost: 0.000012, reasoning_tokens: 0, cached_tokens: 0 })
+    const [usage] = await chatStore.usage(id)
+    expect(usage).toMatchObject({
+      model: "synthetic/model", provider: "synthetic", status: "completed",
+      actualUsd: "0.000012000", inputTokens: 10, outputTokens: 3,
+    })
+    expect((await store.list(scope))[0].preview).not.toContain("0.000012")
+  })
+
+  it("uses exact decimal reservation arithmetic and blocks spending beyond five cents", async () => {
+    const { id } = await authorizedConversation()
+    const reservation = await chatStore.reserve(id, "message-1:0", "synthetic/model", "0.04")
+    await chatStore.complete(reservation, {
+      model: "synthetic/model", provider: "synthetic", costUsd: "0.030000001",
+      inputTokens: 10, outputTokens: 3,
+    }, { cost: 0.030000001 })
+    await expect(chatStore.reserve(id, "message-2:0", "synthetic/model", "0.02"))
+      .rejects.toMatchObject({ code: "CHAT_BUDGET_EXHAUSTED" })
+  })
+
+  it("serializes concurrent reservations and retains unknown costs as blocking holds", async () => {
+    const { id } = await authorizedConversation(3)
+    const concurrent = await Promise.allSettled([
+      chatStore.reserve(id, "message-a:0", "synthetic/model", "0.04"),
+      chatStore.reserve(id, "message-b:0", "synthetic/model", "0.04"),
+    ])
+    const [reservation] = concurrent.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof chatStore.reserve>>> =>
+      result.status === "fulfilled")
+    if (!reservation) throw new Error("Expected fulfilled reservation")
+    await chatStore.unknown(reservation.value)
+    const recreated = createChatStore(drizzle(client, { schema }))
+    await expect(recreated.reserve(id, "message-c:0", "synthetic/model", "0.001"))
+      .rejects.toMatchObject({ code: "CHAT_COST_UNKNOWN" })
+  })
+
+  it("keeps a single-call limit when authorization tokens are renewed", async () => {
+    const { id } = await authorizedConversation(1)
+    const reservation = await chatStore.reserve(id, "message-1:0", "synthetic/model", "0.01")
+    await chatStore.complete(reservation, {
+      model: "synthetic/model", provider: "synthetic", costUsd: "0.001",
+      inputTokens: 10, outputTokens: 3,
+    }, { cost: 0.001 })
+    await chatStore.authorize(scope, id, 20)
+    await expect(chatStore.reserve(id, "message-2:0", "synthetic/model", "0.001"))
+      .rejects.toMatchObject({ code: "CHAT_BUDGET_EXHAUSTED" })
+  })
+
+  it("replays chat migration checksums without touching receipt rows", async () => {
+    const { id } = await authorizedConversation()
+    await chatStore.reserve(id, "message-1:0", "synthetic/model", "0.01")
+    await expect(applyWorkspaceMigration(migrationConnection, chatMigration, "0002_chat_inference"))
+      .resolves.toBe("already-applied")
+    expect((await chatStore.usage(id))[0].reservedUsd).toBe("0.010000000")
+  })
 })
 afterAll(async () => { await client.close() })
 

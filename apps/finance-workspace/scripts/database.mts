@@ -85,7 +85,11 @@ async function main() {
         const verifiedTLS = stream instanceof TLSSocket && stream.encrypted && stream.authorized
         console.log(JSON.stringify({ schema: "praeco_workspace", ...result.rows[0], verifiedTLS }))
       } else {
-        for (const version of [WORKSPACE_MIGRATION, "0002_chat_inference"]) {
+        for (const version of [
+          WORKSPACE_MIGRATION,
+          "0002_chat_inference",
+          "0003_chat_worker_binding",
+        ]) {
           const sql = await readFile(new URL(`../db/migrations/${version}.sql`, import.meta.url), "utf8")
           const outcome = await applyWorkspaceMigration(client, sql, version)
           console.log(JSON.stringify({ schema: "praeco_workspace", migration: version, outcome }))
