@@ -1,0 +1,85 @@
+{
+  "description": "Synthetic input inventory only. No expected decisions or authoritative policy state.",
+  "sources": [
+    {
+      "scenarioId": "BLINKA-01",
+      "sourceAlias": "doc-bogota-pdf",
+      "file": "01.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-02",
+      "sourceAlias": "doc-cloud-pdf",
+      "file": "02.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-03",
+      "sourceAlias": "doc-mexico-pdf",
+      "file": "03.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-04",
+      "sourceAlias": "doc-argentina-pdf",
+      "file": "04.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-05",
+      "sourceAlias": "msg-bogota-forward",
+      "file": "05.txt",
+      "channel": "EMAIL",
+      "mimeType": "text/plain",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-06",
+      "sourceAlias": "doc-new-vendor-cop",
+      "file": "06.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-07",
+      "sourceAlias": "doc-over-budget",
+      "file": "07.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-08",
+      "sourceAlias": "doc-changed-account",
+      "file": "08.pdf",
+      "channel": "PDF",
+      "mimeType": "application/pdf",
+      "purpose": "PRIMARY_INVOICE"
+    },
+    {
+      "scenarioId": "BLINKA-02",
+      "sourceAlias": "msg-cloud-email",
+      "file": "02-context.txt",
+      "channel": "EMAIL",
+      "mimeType": "text/plain",
+      "purpose": "SUPPLEMENTAL_CONTEXT"
+    },
+    {
+      "scenarioId": "BLINKA-04",
+      "sourceAlias": "msg-argentina-chat",
+      "file": "04-context.txt",
+      "channel": "CHAT",
+      "mimeType": "text/plain",
+      "purpose": "SUPPLEMENTAL_CONTEXT"
+    }
+  ]
+}

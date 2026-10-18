@@ -22,7 +22,7 @@ Examples:
 - `docs(l3): define agent capability grants`
 - `chore(repo): initialize Praeco repository`
 
-Breaking changes must include `!` and a `BREAKING CHANGE:` footer explaining the migration. The historical L1 v3.0.0 design contract is frozen: propose amendments through an ADR instead of silently changing it.
+Breaking changes must include `!` and a `BREAKING CHANGE:` footer explaining the migration. Praeco repository v1 retains the historical L1 v3.0.0 wire contract; propose contract amendments through an ADR instead of silently changing it.
 
 ## Non-negotiable design boundaries
 

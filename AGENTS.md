@@ -14,7 +14,7 @@ See `docs/CONTRIBUTING.md`.
 
 ## Frozen and pending boundaries
 
-- **L1** is the accepted initial interface/design baseline, **not** implemented or production-proven. Preserve it. It handles immutable document sources, extraction, evidence grounding and deterministic currency normalization. It NEVER makes financial decisions.
+- **L1** preserves the accepted initial interface/design baseline. Local runtime and LlamaIndex adapters exist; live cloud/OCR and production readiness remain unproved. It handles immutable document sources, extraction, evidence grounding and deterministic currency normalization. It NEVER makes financial decisions. Before integrating L2/L3 or changing L1 assurance, read `docs/architecture/l1-runtime.md`.
 - **L2** is the sole authoritative deterministic decision kernel. Six gates: evidence integrity; duplicate; allowlisted beneficiary/account; contract match; budget; auto-approval threshold. Outcomes are `AUTHORIZED_SIMULATED`, `BLOCKED`, `PENDING_HUMAN_APPROVAL`. Policy/ledger contracts remain under design.
 - **L3** is Praeco Agent Harness: agents, delegations, scoped capabilities, HITL, durable execution, recovery and cross-source payable-case correlation. Pi, Daytona and external workflow services are architectural candidates, not yet mandatory dependencies.
 - **DEMO-001** seeds wholly synthetic enterprise data and inputs. Keep `ground-truth` / expected outcome files inaccessible to application runtime and LLM prompts. Isolated scenario replay must not share ledgers; separate sequential replay can share a ledger with explicit semantics.

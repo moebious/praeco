@@ -1,0 +1,27 @@
+name: L1 evidence intelligence
+on:
+  pull_request:
+    paths: ['packages/evidence-intelligence/**', 'docs/architecture/**', 'docs/evaluation/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
+  push:
+    branches: [main]
+    paths: ['packages/evidence-intelligence/**', 'docs/architecture/**', 'docs/evaluation/**', 'package.json', 'package-lock.json', 'Dockerfile.l1', '.dockerignore', '.github/workflows/l1.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run l1:process
+      - name: Check the canonical L1 contract remains unchanged
+        run: test "$(git hash-object packages/evidence-intelligence/src/contracts.ts)" = ee1f94a797cd461b5fcfa394dd7ebe8cd8d18fd9
+      - name: Smoke-test the isolated runtime container
+        run: |
+          docker build -f Dockerfile.l1 -t praeco-l1 .
+          docker run --rm praeco-l1

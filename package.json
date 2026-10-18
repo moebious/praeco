@@ -1,0 +1,19 @@
+{
+  "name": "praeco",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:l1": "npm run test --workspace @praeco/evidence-intelligence",
+    "l1:demo": "npm run demo --workspace @praeco/evidence-intelligence",
+    "l1:process": "node packages/evidence-intelligence/dist/cli.js",
+    "l1:evaluate": "npm run evaluate --workspace @praeco/evidence-intelligence",
+    "l1:smoke": "npm run smoke --workspace @praeco/evidence-intelligence",
+    "check": "npm run typecheck && npm test && npm run build"
+  }
+}

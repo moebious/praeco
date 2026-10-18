@@ -1,0 +1,20 @@
+Forwarded body snapshot
+SYNTHETIC INVOICE - NO REAL COMPANY OR PAYMENT
+Invoice number: BOG-2026-10
+Issue date: 2026-10-01
+Due date: 2026-10-31
+Period start: 2026-10-01
+Period end: 2026-10-31
+Beneficiary: Synthetic Bogota Developer
+Tax ID: SYN-TAX-BOG
+Payment rail: BANK
+Account: SYN-BOG-ACCOUNT-A
+Contract: SYN-CONTRACT-1
+Description: Synthetic monthly services
+Currency: USD
+Subtotal: 2200.00
+Taxes: 0
+Discounts: 0
+Total due: 2200.00
+Already paid: 0
+Outstanding balance: 2200.00

@@ -2,6 +2,8 @@
 
 **Status:** Accepted initial architecture and interface baseline. **Implementation not yet verified.**
 
+The current `contracts.ts`, runtime guide and executable acceptance fixtures define Praeco L1. Provider and human-validation limits are recorded in the [evaluation documentation](../evaluation/l1-acceptance.md).
+
 ## Mission
 
 Transform untrusted PDF, image, email and chat sources into reproducible, source-attributed financial facts. L1 never authorizes payments, matches authoritative agreements, enforces budgets, validates vendor allowlists or grants agent permissions.

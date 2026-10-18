@@ -2,6 +2,8 @@
 
 **Autonomous, governed financial operations.**
 
+**Repository version:** 1.0.0. The L1 `3.0.0` value identifies its internal wire contract, not the Praeco release.
+
 Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Blinka Challenge**. It explores a domain-specific autonomous Accounts Payable team: intake invoices, extract source-backed financial facts, evaluate company policies deterministically, and produce auditable simulated decisions.
 
 > **Hackathon safety boundary:** No real money moves. `AUTHORIZED_SIMULATED` does **not** mean a bill has been paid. Only synthetic company, vendor, contract, and invoice data may be committed.
@@ -10,7 +12,7 @@ Praeco is the project submitted by team **Praeco** to the **30X Hackathon — Bl
 
 | Component | Ownership | Status |
 | --- | --- | --- |
-| **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | **initial contract/design baseline accepted**; implementation pending |
+| **L1 · Financial Evidence Intelligence** | Immutable sources, parsing, extraction, evidence verification, exact-decimal normalization | Local runtime and LlamaIndex adapters implemented; live cloud/OCR validation pending |
 | **L2 · Financial Decision Kernel** | Deterministic authorization policies, six gates, ledger, budget, idempotency | Specification/implementation pending |
 | **L3 · Praeco Agent Harness** | Collaborative AP agents, governed capabilities, execution recovery, human review, cross-source payable cases | Design in progress |
 | **DEMO-001 · Synthetic AP Environment** | Test fixtures, reference data, seed/reset/replay and test-only oracle | Handoff prepared; integration pending |
@@ -31,7 +33,11 @@ docs/              # Architecture decisions and specifications
 scripts/           # Development and repository checks
 ```
 
-Directories are added as their implementations land; this initial commit sets the guardrails.
+Directories are added as their implementations land. The accepted L1 wire contract is preserved.
+
+## Run L1
+
+Use Node 22.12+ and npm. Run `npm ci`, `npm run check`, and `npm run l1:demo` for a synthetic offline invoice. See the [L1 provisioning and integration guide](docs/architecture/l1-runtime.md) for hosted LlamaParse/LlamaExtract configuration and L2/L3 integration. The offline extractor is explicitly labelled; passing local tests does not establish hosted OCR accuracy or financial authorization safety.
 
 ## Contribution workflow
 
