@@ -1,7 +1,11 @@
 import "server-only"
 
 import { WorkspaceAccessError } from "@/lib/auth"
-import { FinanceWorkspaceError, type FinanceErrorCode } from "@/lib/finance/contracts"
+import {
+  hasErrorName,
+  isFinanceWorkspaceError,
+  type FinanceErrorCode,
+} from "@/lib/finance/contracts"
 
 /**
  * HTTP translation for the payable routes. Errors are reduced to fixed codes:
@@ -39,8 +43,11 @@ export interface FinanceFailure {
 }
 
 export function financeFailure(error: unknown): FinanceFailure {
-  if (error instanceof WorkspaceAccessError) return { status: error.status, code: error.code }
-  if (error instanceof FinanceWorkspaceError) {
+  if (error instanceof WorkspaceAccessError || hasErrorName(error, "WorkspaceAccessError")) {
+    const { status, code } = error as { status?: unknown; code?: unknown }
+    if (typeof status === "number" && typeof code === "string") return { status, code }
+  }
+  if (isFinanceWorkspaceError(error)) {
     return { status: STATUS_BY_CODE[error.code], code: error.code }
   }
   const message = error instanceof Error ? error.message : ""
@@ -93,4 +100,109 @@ export async function readCommandPayload(request: Request): Promise<Record<strin
 export function readString(payload: Record<string, unknown>, key: string): string {
   const value = payload[key]
   return typeof value === "string" ? value : ""
+}
+
+/** Plain HTML forms post here and expect navigation, not a JSON document. */
+export function isFormPost(request: Request): boolean {
+  return !(request.headers.get("content-type") ?? "").includes("application/json")
+}
+
+/**
+ * Success: navigate a form back to the case page (303), answer JSON clients with
+ * the projected payload. Failure: forms get a code query parameter on the same
+ * page, JSON clients get the mapped status.
+ */
+export function financeSuccess(
+  request: Request,
+  returnPath: string,
+  body: unknown
+): Response {
+  return isFormPost(request) ? financeRedirect(request, returnPath) : financeJson(body)
+}
+
+export function financeFailureResponse(
+  request: Request,
+  error: unknown,
+  returnPath: string
+): Response {
+  const failure = financeFailure(error)
+  return isFormPost(request)
+    ? financeRedirect(request, `${returnPath}?financeError=${failure.code}`)
+    : financeJson({ error: failure.code }, failure.status)
+}
+
+/** A cross-site state-changing request is rejected before anything is read. */
+export function financeCrossOriginResponse(request: Request, returnPath: string): Response {
+  return isFormPost(request)
+    ? financeRedirect(request, `${returnPath}?financeError=CROSS_ORIGIN_REJECTED`)
+    : financeJson({ error: "CROSS_ORIGIN_REJECTED" }, 403)
+}
+
+export interface SafeGateCheck {
+  readonly gate: string
+  readonly status: string
+  readonly code: string
+  readonly explanation: string
+}
+
+export interface SafeDecision {
+  readonly decisionId: string
+  readonly outcome: string
+  readonly explanation: string
+  readonly occurredAt: string
+  readonly commitmentId: string | null
+  readonly approvalRequestId: string | null
+  readonly policyRevisionId: string
+  readonly gateChecks: readonly SafeGateCheck[]
+}
+
+/** Explicit projection: kernel records are never forwarded field-by-field. */
+export function safeDecision(record: {
+  decisionId: string
+  outcome: string
+  explanation: string
+  occurredAt: string
+  commitmentId: string | null
+  approvalRequestId: string | null
+  policyRevisionId: string
+  gateChecks: readonly { gate: string; status: string; code: string; explanation: string }[]
+}): SafeDecision {
+  return {
+    decisionId: record.decisionId,
+    outcome: record.outcome,
+    explanation: record.explanation,
+    occurredAt: record.occurredAt,
+    commitmentId: record.commitmentId,
+    approvalRequestId: record.approvalRequestId,
+    policyRevisionId: record.policyRevisionId,
+    gateChecks: record.gateChecks.map((check) => ({
+      gate: check.gate,
+      status: check.status,
+      code: check.code,
+      explanation: check.explanation,
+    })),
+  }
+}
+
+export function safeEvaluation(evaluation: {
+  outcome: string
+  explanation: string
+  financialContextDigest: string
+  intentDigestSha256: string
+  policyRevisionId: string
+  gateChecks: readonly { gate: string; status: string; code: string; explanation: string }[]
+}) {
+  return {
+    outcome: evaluation.outcome,
+    explanation: evaluation.explanation,
+    financialContextDigest: evaluation.financialContextDigest,
+    intentDigestSha256: evaluation.intentDigestSha256,
+    policyRevisionId: evaluation.policyRevisionId,
+    gateChecks: evaluation.gateChecks.map((check) => ({
+      gate: check.gate,
+      status: check.status,
+      code: check.code,
+      explanation: check.explanation,
+    })),
+  }
 }

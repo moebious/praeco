@@ -1,6 +1,7 @@
 import "server-only"
 
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
@@ -29,6 +30,7 @@ import {
   FINANCE_ADMIN_ROLE,
   FinanceWorkspaceError,
   idempotencyKeySchema,
+  isFinanceWorkspaceError,
   type PayableApprovalView,
   type PayableCaseView,
   type PayableEvidenceView,
@@ -52,8 +54,16 @@ import {
 const SYNTHETIC_WORKER_ID = "worker-agent-demo"
 const SYNTHETIC_WORKER_GRANT_REF = "grant-synthetic-worker"
 
+function resolveDefaultSourcesRoot(): string {
+  const direct = join(process.cwd(), "fixtures", "payable-sources")
+  if (existsSync(direct)) return direct
+  const nested = join(process.cwd(), "apps", "finance-workspace", "fixtures", "payable-sources")
+  if (existsSync(nested)) return nested
+  return direct
+}
+
 /** Directory holding the raw synthetic inputs; injected so tests stay isolated. */
-export const DEFAULT_SOURCES_ROOT = join(process.cwd(), "fixtures", "payable-sources")
+export const DEFAULT_SOURCES_ROOT = resolveDefaultSourcesRoot()
 /** Ignored-dir default for L1 artifacts; never inside `public/`. */
 export const DEFAULT_STORAGE_ROOT = join(process.cwd(), ".praeco-demo", "l1")
 
@@ -115,7 +125,9 @@ export class FinanceRuntime {
       envelopeId: safe.envelopeId,
       processingStatus: safe.processingStatus,
       verificationStatus: safe.verificationStatus,
-      usdEquivalent: safe.usdEquivalent,
+      usdEquivalent: safe.usdEquivalent
+        ? `${safe.usdEquivalent.amount} ${safe.usdEquivalent.currency}`
+        : null,
       issues: safe.issues,
       ready: safe.processingStatus === "READY_FOR_POLICY_EVALUATION",
     }
@@ -199,6 +211,14 @@ export class FinanceRuntime {
     return `${caseId}:${actor.principalId}`
   }
 
+  /**
+   * Last in-process decision for a case, or null. Reading it runs no intake, so
+   * the list view never pays the L1 pipeline cost for undecided cases.
+   */
+  latestDecision(caseId: string): FinancialDecisionRecord | null {
+    return this.histories.get(caseId)?.at(-1) ?? null
+  }
+
   /** Evaluation only: no obligation, budget or receipt is written by the kernel. */
   async preview(caseId: string, actor: TrustedActorContext): Promise<FinancialEvaluation> {
     const { service, command } = await this.commandWithEvidence(caseId, `preview-${randomUUID()}`)
@@ -255,7 +275,7 @@ export class FinanceRuntime {
     try {
       intakeResult = await this.intake(caseId)
     } catch (error) {
-      if (error instanceof FinanceWorkspaceError) evidenceError = error.code
+      if (isFinanceWorkspaceError(error)) evidenceError = error.code
       else throw error
     }
 

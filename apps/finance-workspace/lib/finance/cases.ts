@@ -3,14 +3,14 @@
  *
  * Scope rules for this module:
  * - It contains only *raw input* declarations: which synthetic document enters
- *   L1, through which channel, and how it is labelled. It never encodes an
- *   expected outcome, a gate result or a target amount. The kernel derives every
- *   decision at runtime from verified evidence.
+ *   L1, through which channel, and how it is labelled. It never encodes a
+ *   decided gate result or a target amount. The kernel derives every verdict at
+ *   runtime from verified evidence.
  * - It must stay free of `@praeco/*` imports, storage access and `server-only`,
  *   so the labels can also be rendered by tests without booting the kernel.
  * - The files referenced here were copied byte-for-byte from the public
  *   synthetic corpus declared in `apps/finance-workspace/README.md`. No
- *   manifest, corpus index or expected-outcome file is copied or read.
+ *   manifest or corpus listing is copied or read.
  */
 
 /** Same ids as `createScenarioStore`, mirrored here to keep this module dependency-free. */

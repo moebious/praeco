@@ -35,22 +35,47 @@ export const idempotencyKeySchema: z.ZodType<string> = z
   .max(120)
   .regex(/^[A-Za-z0-9._:-]+$/)
 
-export type FinanceErrorCode =
-  | "CASE_NOT_FOUND"
-  | "EVIDENCE_UNAVAILABLE"
-  | "EVIDENCE_NOT_READY"
-  | "ROLE_REQUIRED"
-  | "APPROVAL_NOT_FOUND"
-  | "APPROVAL_REQUEST_MISMATCH"
-  | "INVALID_IDEMPOTENCY_KEY"
-  | "INVALID_ACTION"
-  | "DECISION_REJECTED"
+export const FINANCE_ERROR_CODES = [
+  "CASE_NOT_FOUND",
+  "EVIDENCE_UNAVAILABLE",
+  "EVIDENCE_NOT_READY",
+  "ROLE_REQUIRED",
+  "APPROVAL_NOT_FOUND",
+  "APPROVAL_REQUEST_MISMATCH",
+  "INVALID_IDEMPOTENCY_KEY",
+  "INVALID_ACTION",
+  "DECISION_REJECTED",
+] as const
+
+export type FinanceErrorCode = (typeof FINANCE_ERROR_CODES)[number]
 
 export class FinanceWorkspaceError extends Error {
   constructor(readonly code: FinanceErrorCode) {
     super(code)
     this.name = "FinanceWorkspaceError"
   }
+}
+
+/**
+ * Stable brand check that does **not** rely on class identity.
+ *
+ * Bundlers may evaluate a module more than once (Turbopack/RSC chunks), so an
+ * error thrown by one copy fails `instanceof` against the copy that catches it.
+ * The `name` set in the constructor plus a known error code is stable across
+ * copies, so server error mapping never degrades into a generic 503.
+ */
+export function hasErrorName(error: unknown, name: string): error is Error {
+  return error instanceof Error && error.name === name
+}
+
+export function isFinanceWorkspaceError(error: unknown): error is FinanceWorkspaceError {
+  if (error instanceof FinanceWorkspaceError) return true
+  if (!hasErrorName(error, "FinanceWorkspaceError")) return false
+  const code = (error as { code?: unknown }).code
+  return (
+    typeof code === "string" &&
+    (FINANCE_ERROR_CODES as readonly string[]).includes(code)
+  )
 }
 
 /** Safe per-envelope projection of `summarize()`; never raw invoice or account data. */
