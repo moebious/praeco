@@ -18,10 +18,13 @@ import {
 
 const APP_ROOT = resolve(__dirname, "..")
 
-const NEON_URL = "postgresql://demo_user:S3CR3T-NEON@db.example/neondb?sslmode=require"
-const CLERK_SECRET = "S3CR3T-CLERK"
-const MODEL_KEY = "S3CR3T-MODEL"
-const SANDBOX_KEY = "S3CR3T-SANDBOX"
+const NEON_PASSWORD = "test-redaction-token"
+const buildTestDatabaseUrl = (scheme: string) =>
+  `${scheme}://demo_user:${NEON_PASSWORD}@db.example.test/neondb?sslmode=require`
+const NEON_URL = buildTestDatabaseUrl("postgresql")
+const CLERK_SECRET = "test-token-clerk"
+const MODEL_KEY = "test-token-model"
+const SANDBOX_KEY = "test-token-sandbox"
 
 const CONFIGURED: EnvironmentSource = {
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_test_public",
@@ -31,7 +34,7 @@ const CONFIGURED: EnvironmentSource = {
   DAYTONA_API_KEY: SANDBOX_KEY,
 }
 
-const SECRETS = [CLERK_SECRET, MODEL_KEY, SANDBOX_KEY, "S3CR3T-NEON"]
+const SECRETS = [CLERK_SECRET, MODEL_KEY, SANDBOX_KEY, NEON_PASSWORD]
 
 const tempDirs: string[] = []
 
@@ -111,13 +114,13 @@ describe("environment status", () => {
 
   it("separates a missing variable from a malformed one", () => {
     const status = describeEnvironment({
-      DATABASE_URL: "mysql://demo_user:S3CR3T-NEON@db.example/neondb",
+      DATABASE_URL: buildTestDatabaseUrl("mysql"),
     })
 
     expect(status.invalid).toEqual(["DATABASE_URL"])
     expect(status.services.find((service) => service.service === "database")?.state).toBe("invalid")
     expect(status.services.find((service) => service.service === "inference")?.state).toBe("absent")
-    expect(JSON.stringify(status)).not.toContain("S3CR3T-NEON")
+    expect(JSON.stringify(status)).not.toContain(NEON_PASSWORD)
   })
 
   it("marks a service with one of several variables as partial", () => {
@@ -174,14 +177,14 @@ describe("typed service access", () => {
 
   it("reports a malformed variable by name only", () => {
     const result = readServiceConfig("database", {
-      DATABASE_URL: "mysql://demo_user:S3CR3T-NEON@db.example/neondb",
+      DATABASE_URL: buildTestDatabaseUrl("mysql"),
     })
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.invalid).toEqual(["DATABASE_URL"])
       expect(result.missing).toEqual([])
-      expect(JSON.stringify(result)).not.toContain("S3CR3T-NEON")
+      expect(JSON.stringify(result)).not.toContain(NEON_PASSWORD)
     }
   })
 })

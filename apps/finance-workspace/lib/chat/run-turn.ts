@@ -6,6 +6,12 @@ import { MAX_OUTPUT_TOKENS, MAX_STEPS, safeChatError, type UsageSummary } from "
 import { configuredModel, estimatedCallCost, loadModelCard, reportedStepUsage } from "@/lib/chat/model"
 import { workspaceChatTools } from "@/lib/chat/tools"
 
+function reportTurnFailure(stage: string, error: unknown) {
+  const errorType = error instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(error.name)
+    ? error.name : "UnknownError"
+  console.error("praeco_chat_failure", { stage, code: safeChatError(error).code, errorType })
+}
+
 export async function runChatTurn(input: {
   chatId: string
   bindingId: string
@@ -41,9 +47,19 @@ export async function runChatTurn(input: {
       abortSignal: AbortSignal.any([input.signal, AbortSignal.timeout(45_000)]),
       experimental_telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false },
       prepareStep: async ({ stepNumber, messages }) => {
-        await store.context(input.chatId, input.bindingId)
-        reservation = await store.reserve(input.chatId, `${input.requestId}:${stepNumber}`,
-          configuration.OPENROUTER_MODEL, estimatedCallCost(card, messages))
+        try {
+          await store.context(input.chatId, input.bindingId)
+        } catch (error) {
+          reportTurnFailure("step-context", error)
+          throw error
+        }
+        try {
+          reservation = await store.reserve(input.chatId, `${input.requestId}:${stepNumber}`,
+            configuration.OPENROUTER_MODEL, estimatedCallCost(card, messages))
+        } catch (error) {
+          reportTurnFailure("reserve", error)
+          throw error
+        }
         return {}
       },
       onStepFinish: async (step) => {
@@ -63,7 +79,10 @@ export async function runChatTurn(input: {
           throw safeChatError(error)
         }
       },
-      onError: async () => { await unknown() },
+      onError: async ({ error }) => {
+        reportTurnFailure("stream", error)
+        await unknown()
+      },
       onAbort: async () => { await unknown() },
       onFinish: async () => { await unknown() },
     })

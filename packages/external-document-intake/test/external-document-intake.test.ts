@@ -107,7 +107,9 @@ describe('external documentary provenance', () => {
     expect(document.binding).toMatchObject({ ...reference, tenantId: 'tenant-a', sourceId: ready.envelope.source.sourceId,
       sourceHashSha256: integrationHash(bytes) });
     expect(await provenance.history('tenant-a', objectReference)).toEqual([document.binding]);
-  }, 15000);
+    // Local OCR takes 10-16s per document and exceeds 15s when the whole
+    // monorepo suite competes for CPU. This is an upper bound, not a wait.
+  }, 60000);
 
   it('reuses the original binding and persisted references on identical delivery after restart', async () => {
     const { root, l1, adapter, bill } = await setup();

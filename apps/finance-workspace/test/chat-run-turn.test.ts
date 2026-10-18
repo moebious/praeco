@@ -30,7 +30,7 @@ interface Hooks {
   prepareStep: (event: { stepNumber: number; messages: ModelMessage[] }) => Promise<unknown>
   onStepFinish: (event: { usage: LanguageModelUsage; response: { modelId: string; id: string } }) => Promise<void>
   onAbort: () => Promise<void>
-  onError: () => Promise<void>
+  onError: (event: { error: unknown }) => Promise<void>
   onFinish: () => Promise<void>
 }
 
@@ -97,7 +97,13 @@ describe("bounded managed model loop", () => {
   it("records a provider error without exposing its raw message or releasing a hold", async () => {
     const options = await hooks()
     await options.prepareStep({ stepNumber: 0, messages })
-    await options.onError()
+    const logger = vi.spyOn(console, "error").mockImplementation(() => {})
+    await options.onError({ error: new Error("synthetic-provider-error") })
+    expect(logger).toHaveBeenCalledWith("praeco_chat_failure", {
+      stage: "stream", code: "CHAT_UNAVAILABLE", errorType: "Error",
+    })
+    expect(JSON.stringify(logger.mock.calls)).not.toContain("synthetic-provider-error")
+    logger.mockRestore()
     expect(ledger.unknown).toHaveBeenCalledWith("reservation_synthetic")
   })
 })
