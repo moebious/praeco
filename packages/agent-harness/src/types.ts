@@ -6,7 +6,7 @@ export type AssignmentId = string;
 export type PayableCaseId = string;
 export type L1EnvelopeId = string;
 export type L2DecisionId = string;
-export type SpecialistRole = 'VERA' | 'KAEL' | 'NOVA';
+export type SpecialistRole = 'VERA' | 'KAEL' | 'NOVA' | 'EVE';
 export type FinancialOutcome = 'AUTHORIZED_SIMULATED' | 'BLOCKED' | 'PENDING_HUMAN_APPROVAL';
 
 export type AssignmentState =
@@ -26,7 +26,7 @@ export interface TrustedPrincipal {
 }
 
 export interface ChannelScope {
-  provider: 'WEB' | 'EMAIL' | 'TELEGRAM' | 'SLACK' | 'WHATSAPP';
+  provider: 'WEB' | 'EMAIL' | 'TELEGRAM' | 'SLACK' | 'WHATSAPP' | 'AGENTMAIL' | string;
   installationId: string;
 }
 
