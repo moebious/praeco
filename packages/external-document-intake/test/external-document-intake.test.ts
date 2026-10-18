@@ -34,6 +34,61 @@ function imported(result: SyntheticErpImportResult) {
 }
 
 describe('external documentary provenance', () => {
+  it('returns a distinct supplemental-context result with a persisted processing run and no invoice', async () => {
+    const { adapter, l1, bill, root } = await setup();
+    const contextBill = { ...bill, attachment: { ...bill.attachment!, bytes: Buffer.from('Supplemental context\nThe attached note describes the work performed.') } };
+    const result = await adapter.importBill(contextBill);
+    expect(result.kind).toBe('SUPPLEMENTAL_CONTEXT_IMPORTED');
+    if (result.kind === 'DOCUMENT_REQUIRED') throw new Error('Expected retained context');
+    expect(result.document).toMatchObject({ sourceDisposition: 'SUPPLEMENTAL_CONTEXT', pipelineRunId: expect.any(String), envelopes: [] });
+    expect(await l1.reader.loadRun('tenant-a', result.document.pipelineRunId)).toMatchObject({ sourceId: result.document.binding.sourceId,
+      pipelineRunId: result.document.pipelineRunId, sourceDisposition: 'SUPPLEMENTAL_CONTEXT', envelopeIds: [], status: 'COMPLETED' });
+    const restarted = await setup('tenant-a', root);
+    expect(await restarted.adapter.importBill(contextBill)).toEqual(result);
+  });
+  it('rejects empty invoice results instead of persisting an ambiguous completion receipt', async () => {
+    const { adapter, l1, bill, provenance } = await setup();
+    vi.spyOn(l1, 'processWithReceipt').mockResolvedValue({ pipelineRunId: 'unpersisted-run', sourceDisposition: 'INVOICE_OR_UNCERTAIN', envelopes: [] });
+    await expect(adapter.importBill(bill)).rejects.toThrow('INVALID_INTEGRATION_RECEIPT');
+    const [binding] = await provenance.history('tenant-a', objectReference);
+    expect(await provenance.loadReceipt('tenant-a', binding!.bindingId)).toBeNull();
+  });
+  it('rejects an empty supplemental result without its persisted run', async () => {
+    const { adapter, l1, bill } = await setup();
+    vi.spyOn(l1, 'processWithReceipt').mockResolvedValue({ pipelineRunId: 'unpersisted-run', sourceDisposition: 'SUPPLEMENTAL_CONTEXT', envelopes: [] });
+    await expect(adapter.importBill(bill)).rejects.toThrow('INVALID_PROCESSING_RECEIPT');
+  });
+  it('rejects a supplemental receipt relabelled from an invoice processing run', async () => {
+    const { adapter, bill, root } = await setup();
+    const document = imported(await adapter.importBill(bill));
+    const path = join(root, 'provenance', integrationHash('tenant-a'), 'receipts', `${document.binding.bindingId}.json`);
+    const receipt = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify({ ...receipt, sourceDisposition: 'SUPPLEMENTAL_CONTEXT', envelopes: [] }));
+    await expect(adapter.intake.load(document.binding.bindingId)).rejects.toThrow('IMPORTED_RUN_BINDING_MISMATCH');
+  });
+  it('fails closed on draft receipts that lack a run reference or disposition', async () => {
+    const { adapter, bill, root } = await setup();
+    const document = imported(await adapter.importBill(bill));
+    const path = join(root, 'provenance', integrationHash('tenant-a'), 'receipts', `${document.binding.bindingId}.json`);
+    const { pipelineRunId: _run, sourceDisposition: _disposition, ...legacy } = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify(legacy));
+    await expect(adapter.intake.load(document.binding.bindingId)).rejects.toThrow('INVALID_INTEGRATION_RECEIPT');
+  });
+  it('verifies original source integrity when a supplemental result has no envelope', async () => {
+    const { adapter, bill, root } = await setup();
+    const result = await adapter.importBill({ ...bill, attachment: { ...bill.attachment!, bytes: Buffer.from('Supplemental context\nSynthetic work note.') } });
+    if (result.kind !== 'SUPPLEMENTAL_CONTEXT_IMPORTED') throw new Error('Expected supplemental result');
+    await writeFile(join(root, 'evidence', 'objects', integrationHash('tenant-a'), result.document.binding.sourceHashSha256), 'altered');
+    await expect(adapter.intake.load(result.document.binding.bindingId)).rejects.toThrow('IMPORTED_RUN_UNAVAILABLE');
+  });
+  it('preserves failed processing as a run-linked non-ready result', async () => {
+    const { adapter, bill, l1 } = await setup();
+    const bytes = await readFile(new URL('../../evidence-intelligence/test/fixtures/corpus/13.png', import.meta.url));
+    const document = imported(await adapter.importBill({ ...bill, attachment: { ...bill.attachment!, bytes, channel: 'IMAGE', mimeType: 'image/png' } }));
+    expect(document).toMatchObject({ sourceDisposition: 'INVOICE_OR_UNCERTAIN', envelopes: [{ processingStatus: 'PROCESSING_FAILED' }] });
+    expect(await l1.reader.loadRun('tenant-a', document.pipelineRunId)).toMatchObject({ status: 'FAILED' });
+    await expect(l1.reader.loadReady('tenant-a', document.envelopes[0]!.envelopeId)).rejects.toThrow('ENVELOPE_NOT_READY');
+  });
   it('imports a synthetic ERP PDF and keeps accounting claims outside the verified envelope', async () => {
     const { l1, adapter, bill, provenance } = await setup();
     const bytes = await readFile(new URL('../../evidence-intelligence/test/fixtures/corpus/01.pdf', import.meta.url));
@@ -56,13 +111,13 @@ describe('external documentary provenance', () => {
 
   it('reuses the original binding and persisted references on identical delivery after restart', async () => {
     const { root, l1, adapter, bill } = await setup();
-    const process = vi.spyOn(l1, 'process');
+    const process = vi.spyOn(l1, 'processWithReceipt');
     const first = imported(await adapter.importBill(bill));
     const duplicate = imported(await adapter.importBill(bill));
     expect(duplicate).toEqual(first);
     expect(process).toHaveBeenCalledTimes(1);
     const restarted = await setup('tenant-a', root);
-    const reprocess = vi.spyOn(restarted.l1, 'process');
+    const reprocess = vi.spyOn(restarted.l1, 'processWithReceipt');
     expect(imported(await restarted.adapter.importBill(bill))).toEqual(first);
     expect(reprocess).not.toHaveBeenCalled();
   });
@@ -216,7 +271,7 @@ describe('external documentary provenance', () => {
     const receiptPath = join(root, 'provenance', integrationHash('tenant-a'), 'receipts', `${first.binding.bindingId}.json`);
     const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
     await writeFile(receiptPath, JSON.stringify({ ...receipt, envelopes: second.envelopes }));
-    await expect(adapter.intake.load(first.binding.bindingId)).rejects.toThrow('IMPORTED_EVIDENCE_BINDING_MISMATCH');
+    await expect(adapter.intake.load(first.binding.bindingId)).rejects.toThrow('IMPORTED_RUN_BINDING_MISMATCH');
   });
 
   it('detects source corruption when resolving a cached imported result', async () => {
@@ -224,7 +279,7 @@ describe('external documentary provenance', () => {
     const document = imported(await adapter.importBill(bill));
     const ready = await l1.reader.loadReady('tenant-a', document.envelopes[0]!.envelopeId);
     await writeFile(join(root, 'evidence', ready.envelope.source.storageKey), 'tampered');
-    await expect(adapter.intake.load(document.binding.bindingId)).rejects.toThrow('IMPORTED_EVIDENCE_UNAVAILABLE');
+    await expect(adapter.intake.load(document.binding.bindingId)).rejects.toThrow('IMPORTED_RUN_UNAVAILABLE');
     await expect(l1.reader.loadReady('tenant-a', ready.envelope.envelopeId)).rejects.toThrow('ARTIFACT_HASH_MISMATCH');
   });
 

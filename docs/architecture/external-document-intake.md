@@ -8,14 +8,14 @@ This implements the additive integration slice described by `L1-INT-001`. It cha
 | --- | --- | --- |
 | Exact documentary bytes | Tenant-scoped immutable L1 registration | Reuse `register()` after checking document size/type |
 | Provider identity and revisions | `originMessageId` supplies transport immutability; no ERP metadata model | Separate external bindings and deterministic snapshot origins |
-| Extraction, citations and money | Independent verifier and pinned exact-decimal normalization | Reuse `process()` without ERP values in its input |
+| Extraction, citations and money | Independent verifier and pinned exact-decimal normalization | Use additive `processWithReceipt()` without ERP values in its input; preserve `process()` |
 | Downstream trust | Persisted envelope reader and deterministic replay | Return IDs, then resolve through the trusted reader |
 | Payable correlation and ERP discrepancies | L3 owns the case; L2 owns financial validity | Return accounting context separately; make no matching decision |
 | Persistence and orchestration | L1 immutable persistence port; local implementation | Separate local provenance store; Neon and durable execution remain future adapters |
 
 Implementation lives in `packages/external-document-intake`, outside the L1 domain package. Real QuickBooks, Xero and Blinka adapters are unavailable. Their provider names are reserved metadata values, not compatibility claims. Only `MOCK_ERP` is exercised.
 
-The handoff's cloud-failure description predates the latest narrow synthetic recheck. The [live provider record](../evaluation/llama-cloud-live-smoke.md) preserves the earlier failures and later two-PDF success; the scan still requires review. This integration does not add cloud assurance or run a billable smoke test.
+The [live provider record](../evaluation/llama-cloud-live-smoke.md) preserves the earlier failures and subsequent two-PDF success; the scan still requires review. Citation recovery has since been restricted to exact schema placeholders on their cited page, with retained recovery/rejection reasons. A hosted recheck of this restriction remains pending. This integration does not add cloud assurance or run a billable smoke test.
 
 ## Trusted intake operation
 
@@ -66,7 +66,9 @@ An external object is identified by the authenticated tenant plus provider, conn
 
 The origin is a digest of provider/connection/object/attachment, a tagged provider revision or content digest, and document channel/MIME. L1 supplies tenant scoping. Binding IDs also include the source digest and retained external metadata. Capture time is first-writer-wins and does not affect identity. Provider timestamps and revision names do not establish financial authority or select a financially valid "latest" obligation.
 
-Bindings and completion receipts are separate immutable records. A captured binding without a receipt records an interrupted attempt and can be redelivered. A receipt retains envelope IDs, run IDs and processing dispositions; it is not a verification report. Before returning references, the intake checks each through `reader.load()` and compares the stored source/run/status bindings. Corrupted or redirected evidence fails closed.
+Bindings and completion receipts are separate immutable records. A captured binding without a receipt records an interrupted attempt and can be redelivered. Every receipt retains a top-level `pipelineRunId`, `sourceDisposition`, envelope references and completion time. Before returning it, the intake resolves the retained run through `reader.loadRun()` and checks its source/hash, disposition, run status and exact envelope list. The L1 run reader verifies the original source and retained artifacts. Each nonempty envelope reference is also checked through `reader.load()`. Corrupted, missing or redirected run/evidence records fail closed.
+
+`SUPPLEMENTAL_CONTEXT` requires an empty envelope list and a persisted completed supplemental run. `INVOICE_OR_UNCERTAIN` requires at least one envelope; it may still contain review, rejection or failed processing. The mock returns `SUPPLEMENTAL_CONTEXT_IMPORTED` for context instead of `DOCUMENT_IMPORTED`. No invoice or financial obligation is manufactured from context. Draft receipts from before these fields existed fail closed; they are never silently overwritten or assigned a guessed run. Disposable synthetic stores may be reset, while any retained deployment needs an explicit receipt migration.
 
 Sequential identical redelivery with a receipt avoids another processing run. Concurrent deliveries or a crash before the receipt commit can still produce extra retained L1 runs and provider charges. No distributed exactly-once processing is claimed. A completed failed/review receipt is returned unchanged; explicit reprocessing and retry orchestration belong to the trusted application/L3, not silent receipt replacement.
 
@@ -74,15 +76,17 @@ The local store uses restricted directories, hashed tenant/record paths and atom
 
 ## L3 and L2 consumption
 
-`imported.binding` correlates the external object to its immutable `sourceId` and `sourceHashSha256`. `imported.envelopes` contains only envelope IDs, run IDs and L1 dispositions. L3 owns `PayableCase` creation and association. The adapter neither creates a payable-case ID nor uses a Bill ID as the business duplicate key.
+`imported.binding` correlates the external object to its immutable `sourceId` and `sourceHashSha256`. `imported.pipelineRunId` and `imported.sourceDisposition` explain processing even when `imported.envelopes` is empty. L3 retains supplemental context against its source/run rather than proposing a financial obligation. For invoice/uncertain results, envelope references contain IDs, run IDs and L1 dispositions. L3 owns `PayableCase` creation and association. The adapter neither creates a payable-case ID nor uses a Bill ID as the business duplicate key.
 
 L2 resolves each proposed envelope through the existing trusted boundary:
 
 ```ts
-const evidence = await l1.reader.loadReady(
-  authenticatedTenantId,
-  imported.envelopes[0].envelopeId,
-);
+if (imported.sourceDisposition === 'INVOICE_OR_UNCERTAIN') {
+  const evidence = await l1.reader.loadReady(
+    authenticatedTenantId,
+    imported.envelopes[0].envelopeId,
+  );
+}
 ```
 
 A reference or an ERP JSON record does not grant readiness. `loadReady()` still rejects missing, corrupt or non-ready evidence. An observed account is a documentary claim; L2 independently resolves the permitted beneficiary/account, contract, duplicates, budget and policy. An ERP recorded amount never replaces the document's observed amount. No banking quote enters L1 normalization and no payment decision or instruction is emitted.
@@ -93,6 +97,6 @@ Revoked/unavailable connections block new imports and integration receipt lookup
 
 `createSyntheticErpAdapter()` accepts an already-fetched synthetic Bill, recorded amount, optional opaque beneficiary reference and optional document attachment. It returns accounting context separately from document references. A Bill without an attachment yields `DOCUMENT_REQUIRED`, with no registered source or fabricated envelope. Account references cannot fill missing documentary fields or authorize a beneficiary.
 
-Run `npm run test:l1:integration` for the explicit integration suite. It exercises an actual synthetic PDF, repeat and concurrent delivery, revision conflicts, digest snapshots, multiple attachments, tenant separation, missing attachments, ERP/document amount disagreement, missing account evidence, revoked/unavailable connections, unsafe metadata, source/receipt tampering and offline historical replay.
+Run `npm run test:l1:integration` for the explicit integration suite. It exercises an actual synthetic PDF, repeat and concurrent delivery, revision conflicts, digest snapshots, multiple attachments, tenant separation, missing attachments, ERP/document amount disagreement, missing account evidence, revoked/unavailable connections, unsafe metadata, source/receipt tampering and offline historical replay. Supplemental-context tests also check restart/idempotency, missing or contradictory run records, source corruption without an envelope and explicit processing-failure status.
 
 Run `npm ci`, `npm run check`, `npm run l1:demo` and `npm run l1:evaluate` for full local validation. The 30-document corpus and Golden Set expected decisions stay test-only and unchanged. Independent field annotation remains deferred; these tests establish boundary behavior, not production extraction accuracy, real ERP interoperability or end-to-end financial authorization.

@@ -1,6 +1,6 @@
 # External document intake
 
-Backend-only documentary intake and provenance for Praeco integrations. The package wraps existing L1 registration/processing, stores external object revisions separately and returns persisted evidence references for L3. It never makes a financial decision.
+Backend-only documentary intake and provenance for Praeco integrations. The package wraps existing L1 registration/processing, stores external object revisions separately and returns persisted evidence references for L3. Every result includes a persisted run ID and explicit source disposition; supplemental context returns no invoice. It never makes a financial decision.
 
 - [Integration impact, provenance and trust boundaries](../../docs/architecture/external-document-intake.md)
 - [L1 runtime and trusted readers](../../docs/architecture/l1-runtime.md)

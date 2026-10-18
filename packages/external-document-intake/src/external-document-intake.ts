@@ -1,5 +1,5 @@
 import type { DocumentSource, IntakeChannel, L1Runtime } from '@praeco/evidence-intelligence';
-import { ExternalDocumentReferenceSchema, ExternalDocumentIntakeError, IntegrationIdSchema,
+import { ExternalDocumentReferenceSchema, ExternalDocumentReceiptSchema, ImportedProcessingRunSchema, ExternalDocumentIntakeError, IntegrationIdSchema,
   externalObjectIdentity, integrationHash, parseIntegration } from './external-document-provenance.js';
 import type { ExternalDocumentBinding, ExternalDocumentProvenanceStore, ExternalDocumentReceipt, ExternalDocumentReference } from './external-document-provenance.js';
 
@@ -11,11 +11,13 @@ export interface ExternalDocumentInput {
 }
 export interface ExternalDocumentResult {
   binding: ExternalDocumentBinding;
+  pipelineRunId: string;
+  sourceDisposition: ExternalDocumentReceipt['sourceDisposition'];
   envelopes: ExternalDocumentReceipt['envelopes'];
 }
 export interface ExternalDocumentIntakeOptions {
   authenticatedTenantId: string;
-  l1: Pick<L1Runtime, 'register' | 'process' | 'reader'>;
+  l1: Pick<L1Runtime, 'register' | 'processWithReceipt' | 'reader'>;
   provenance: ExternalDocumentProvenanceStore;
   resolveConnection(input: { tenantId: string; provider: ExternalDocumentReference['provider']; connectionId: string }): Promise<'ACTIVE' | 'REVOKED' | 'UNAVAILABLE' | 'NOT_FOUND'>;
   now?: () => string;
@@ -31,16 +33,27 @@ export function createExternalDocumentIntake(options: ExternalDocumentIntakeOpti
     catch { throw new ExternalDocumentIntakeError('EXTERNAL_CONNECTION_UNAVAILABLE'); }
     if (status !== 'ACTIVE') throw new ExternalDocumentIntakeError(status === 'REVOKED' ? 'EXTERNAL_CONNECTION_REVOKED' : 'EXTERNAL_CONNECTION_UNAVAILABLE');
   }
-  async function result(binding: ExternalDocumentBinding, receipt: ExternalDocumentReceipt): Promise<ExternalDocumentResult> {
+  async function result(binding: ExternalDocumentBinding, input: ExternalDocumentReceipt): Promise<ExternalDocumentResult> {
+    const receipt = parseIntegration(ExternalDocumentReceiptSchema, input, 'INVALID_INTEGRATION_RECEIPT');
+    let storedRun: unknown;
+    try { storedRun = await options.l1.reader.loadRun(tenantId, receipt.pipelineRunId); }
+    catch { throw new ExternalDocumentIntakeError('IMPORTED_RUN_UNAVAILABLE'); }
+    const run = parseIntegration(ImportedProcessingRunSchema, storedRun, 'INVALID_PROCESSING_RECEIPT');
+    const expectedStatus = receipt.envelopes.some(envelope => envelope.processingStatus === 'PROCESSING_FAILED') ? 'FAILED' : 'COMPLETED';
+    if (run.pipelineRunId !== receipt.pipelineRunId || run.sourceId !== binding.sourceId || run.sourceHashSha256 !== binding.sourceHashSha256
+      || run.sourceDisposition !== receipt.sourceDisposition || run.status !== expectedStatus
+      || JSON.stringify(run.envelopeIds) !== JSON.stringify(receipt.envelopes.map(envelope => envelope.envelopeId)))
+      throw new ExternalDocumentIntakeError('IMPORTED_RUN_BINDING_MISMATCH');
     for (const reference of receipt.envelopes) {
       let envelope;
       try { envelope = await options.l1.reader.load(tenantId, reference.envelopeId); }
       catch { throw new ExternalDocumentIntakeError('IMPORTED_EVIDENCE_UNAVAILABLE'); }
       if (envelope.source.tenantId !== tenantId || envelope.source.sourceId !== binding.sourceId
         || envelope.source.sourceHashSha256 !== binding.sourceHashSha256 || envelope.pipelineRunId !== reference.pipelineRunId
+        || envelope.pipelineRunId !== receipt.pipelineRunId
         || envelope.processingStatus !== reference.processingStatus) throw new ExternalDocumentIntakeError('IMPORTED_EVIDENCE_BINDING_MISMATCH');
     }
-    return { binding, envelopes: receipt.envelopes };
+    return { binding, pipelineRunId: receipt.pipelineRunId, sourceDisposition: receipt.sourceDisposition, envelopes: receipt.envelopes };
   }
 
   return {
@@ -64,11 +77,12 @@ export function createExternalDocumentIntake(options: ExternalDocumentIntakeOpti
       const binding = await options.provenance.capture({ ...reference, tenantId, sourceId: source.sourceId, sourceHashSha256: hash });
       const prior = await options.provenance.loadReceipt(tenantId, binding.bindingId);
       if (prior) return result(binding, prior);
-      let envelopes;
-      try { envelopes = await options.l1.process(source); }
+      let processed;
+      try { processed = await options.l1.processWithReceipt(source); }
       catch { throw new ExternalDocumentIntakeError('DOCUMENT_PROCESSING_FAILED'); }
       const candidate: ExternalDocumentReceipt = { bindingId: binding.bindingId, sourceId: source.sourceId,
-        sourceHashSha256: hash, completedAt: now(), envelopes: envelopes.map(envelope => ({ envelopeId: envelope.envelopeId,
+        sourceHashSha256: hash, completedAt: now(), pipelineRunId: processed.pipelineRunId, sourceDisposition: processed.sourceDisposition,
+        envelopes: processed.envelopes.map(envelope => ({ envelopeId: envelope.envelopeId,
           pipelineRunId: envelope.pipelineRunId, processingStatus: envelope.processingStatus })) };
       await result(binding, candidate);
       const receipt = await options.provenance.saveReceipt(tenantId, candidate);

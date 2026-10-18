@@ -23,16 +23,29 @@ export const ExternalDocumentBindingSchema = ExternalDocumentReferenceSchema.ext
   sourceHashSha256: hashSchema,
   capturedAt: instantSchema,
 });
-export const ExternalDocumentReceiptSchema = z.strictObject({
+const envelopeReferenceSchema = z.strictObject({
+  envelopeId: IntegrationIdSchema,
+  pipelineRunId: IntegrationIdSchema,
+  processingStatus: z.enum(['READY_FOR_POLICY_EVALUATION', 'REVIEW_REQUIRED', 'REJECTED', 'PROCESSING_FAILED']),
+});
+const receiptBaseSchema = z.strictObject({
   bindingId: hashSchema,
   sourceId: IntegrationIdSchema,
   sourceHashSha256: hashSchema,
-  envelopes: z.array(z.strictObject({
-    envelopeId: IntegrationIdSchema,
-    pipelineRunId: IntegrationIdSchema,
-    processingStatus: z.enum(['READY_FOR_POLICY_EVALUATION', 'REVIEW_REQUIRED', 'REJECTED', 'PROCESSING_FAILED']),
-  })).max(50),
+  pipelineRunId: IntegrationIdSchema,
   completedAt: instantSchema,
+});
+export const ExternalDocumentReceiptSchema = z.discriminatedUnion('sourceDisposition', [
+  receiptBaseSchema.extend({ sourceDisposition: z.literal('INVOICE_OR_UNCERTAIN'), envelopes: z.array(envelopeReferenceSchema).min(1).max(50) }),
+  receiptBaseSchema.extend({ sourceDisposition: z.literal('SUPPLEMENTAL_CONTEXT'), envelopes: z.array(envelopeReferenceSchema).length(0) }),
+]);
+export const ImportedProcessingRunSchema = z.object({
+  pipelineRunId: IntegrationIdSchema,
+  sourceId: IntegrationIdSchema,
+  sourceHashSha256: hashSchema,
+  sourceDisposition: z.enum(['INVOICE_OR_UNCERTAIN', 'SUPPLEMENTAL_CONTEXT']),
+  envelopeIds: z.array(IntegrationIdSchema).max(50),
+  status: z.enum(['COMPLETED', 'FAILED']),
 });
 
 export type ExternalObjectReference = z.infer<typeof ExternalObjectReferenceSchema>;

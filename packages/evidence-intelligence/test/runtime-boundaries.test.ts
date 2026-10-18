@@ -8,6 +8,18 @@ import { LabelledTextExtractor } from '../src/extraction.js';
 import { L1Error } from '../src/integrity.js';
 
 describe('L1 runtime boundaries', () => {
+  it('returns persisted run references for invoices and supplemental context through the additive runtime API', async () => {
+    const { runtime } = await setup();
+    for (const body of [await sample(), 'Supplemental context\nReference: synthetic-work-note']) {
+      const source = await runtime.register({ tenantId: 'a', bytes: Buffer.from(body), channel: 'CHAT', mimeType: 'text/plain' });
+      const result = await runtime.processWithReceipt(source);
+      expect(result.sourceDisposition).toBe(result.envelopes.length ? 'INVOICE_OR_UNCERTAIN' : 'SUPPLEMENTAL_CONTEXT');
+      expect(await runtime.reader.loadRun('a', result.pipelineRunId)).toMatchObject({ pipelineRunId: result.pipelineRunId,
+        sourceId: source.sourceId, sourceHashSha256: source.sourceHashSha256, sourceDisposition: result.sourceDisposition,
+        envelopeIds: result.envelopes.map(envelope => envelope.envelopeId), status: 'COMPLETED' });
+      expect(await runtime.reader.loadRun('b', result.pipelineRunId)).toBeNull();
+    }
+  });
   it('retains supplemental chat without manufacturing an invoice or calling extraction', async () => {
     let calls = 0;
     const extractor: ExtractionPort = { provider: 'SHOULD_NOT_RUN', version: 'test', configuration: {}, async extract() { calls++; throw new Error('not invoice'); } };

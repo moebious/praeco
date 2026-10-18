@@ -16,6 +16,7 @@ const SyntheticErpBillSchema = z.strictObject({
 export type SyntheticErpBill = z.infer<typeof SyntheticErpBillSchema>;
 export type SyntheticErpImportResult =
   | { kind: 'DOCUMENT_REQUIRED'; externalReference: ExternalDocumentReference; accountingRecord: Omit<SyntheticErpBill, 'attachment'> }
+  | { kind: 'SUPPLEMENTAL_CONTEXT_IMPORTED'; document: ExternalDocumentResult; accountingRecord: Omit<SyntheticErpBill, 'attachment'> }
   | { kind: 'DOCUMENT_IMPORTED'; document: ExternalDocumentResult; accountingRecord: Omit<SyntheticErpBill, 'attachment'> };
 
 export function createSyntheticErpAdapter(options: Omit<ExternalDocumentIntakeOptions, 'resolveConnection'> & {
@@ -43,7 +44,7 @@ export function createSyntheticErpAdapter(options: Omit<ExternalDocumentIntakeOp
       if (!attachment) return { kind: 'DOCUMENT_REQUIRED', externalReference: reference, accountingRecord };
       const document = await intake.ingest({ externalReference: reference, documentBytes: attachment.bytes,
         channel: attachment.channel, mimeType: attachment.mimeType });
-      return { kind: 'DOCUMENT_IMPORTED', document, accountingRecord };
+      return { kind: document.sourceDisposition === 'SUPPLEMENTAL_CONTEXT' ? 'SUPPLEMENTAL_CONTEXT_IMPORTED' : 'DOCUMENT_IMPORTED', document, accountingRecord };
     },
   };
 }
