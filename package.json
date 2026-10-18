@@ -20,6 +20,6 @@
     "l2:web": "npm run web --workspace @praeco/finance-dashboard",
     "demo": "npm run demo --workspace @praeco/financial-decision-kernel",
     "web": "npm run web --workspace @praeco/finance-dashboard",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run build && npm run typecheck && npm test"
   }
 }
